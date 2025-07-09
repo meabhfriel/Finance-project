@@ -15,7 +15,6 @@ another comment
 !git clone https://github.com/meabhfriel/Finance-project.git
 %cd Finance-project
 
-why thank you
 !git add notes.txt
 !git commit -m "Added notes.txt from Jupyter"
 !git push origin main
@@ -24,3 +23,6 @@ why thank you
 #PULLING FROM GIT
 %cd Finance-project
 !git pull origin main
+
+
+why thank you very much
