@@ -17,3 +17,8 @@ another comment
 !git add notes.txt
 !git commit -m "Added notes.txt from Jupyter"
 !git push origin main
+
+
+#PULLING FROM GIT
+%cd Finance-project
+!git pull origin main
