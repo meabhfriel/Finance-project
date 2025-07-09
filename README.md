@@ -11,7 +11,7 @@ hi guys
 another comment
 
 
-#how to push and commit from jupyter notebook 
+#HOW TO PUSH AND COMMIT CHANGES TO GIT FROM JUPYTER NOTEBOOK
 !git clone https://github.com/meabhfriel/Finance-project.git
 %cd Finance-project
 !git add notes.txt
