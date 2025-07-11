@@ -417,3 +417,21 @@ if 'MCD' in financial_statements_data:
         print("Cannot generate DCF analysis prompt: MCD fundamental data is empty after processing.")
 else:
     print("Cannot generate DCF analysis prompt: MCD not found in financial statements data.")
+
+import requests
+
+def call_ollama(prompt, model='gemma3'):
+    response = requests.post(
+        'http://localhost:11434/api/generate',
+        json={
+            'model': model,
+            'prompt': prompt,
+            'stream': False  # Set to True if you want streamed output
+        }
+    )
+    return response.json()['response']
+
+# Example usage
+reply = call_ollama(ai_dcf_prompt)
+print(reply)
+
