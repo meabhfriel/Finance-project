@@ -1,6 +1,7 @@
 import pandas as pd
 import yfinance as yf
-selected_ticker = 'AAPL' # <--- CHANGE THIS to the stock ticker you want to analyze 
+import numpy as np
+selected_ticker = 'MCD' # <--- CHANGE THIS to the stock ticker you want to analyze 
 all_companies_data = {}
 print(f"Analyzing selected ticker: {selected_ticker}")
 historical_prices_data = {}
@@ -137,3 +138,282 @@ ai_tech_prompt = generate_technical_forecast_prompt(selected_ticker, se_hist_dat
 
 print("\nAI prompt for Technical Analysis")
 print(ai_tech_prompt)
+
+
+
+
+##
+##
+##              dcf code
+##
+##
+##
+
+
+def generate_fundamental_dcf_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+    recent_data = df_with_fundamentals.tail(4)  # Use last 4 periods (e.g., quarters or years)
+
+    # Format relevant rows to string for visibility in the prompt
+    data_cols = [
+        'Total_Revenue', 'Net_Income_Common_Stockholders', 'Operating_Income', 'Gross_Profit',
+        'Operating_Cash_Flow', 'Capital_Expenditure', 'Total_Assets',
+        'Stockholders_Equity', 'Total_Debt', 'Current_Assets', 'Current_Liabilities'
+    ]
+    fundamental_str = recent_data[data_cols].to_string(index=False)
+
+    # Prompt construction
+    prompt = f"""
+Perform a Discounted Cash Flow (DCF) analysis for {ticker} using the following recent fundamental financial data:
+
+{fundamental_str}
+
+Please:
+
+1. **Project Free Cash Flows (FCF)** for the next 5 years based on historical Operating Cash Flow minus Capital Expenditures.
+2. **Calculate the Terminal Value** using the Gordon Growth Model. Use an assumed long-term growth rate (e.g., 2.5%) and a discount rate (e.g., 8%). Show the formula and exact math.
+3. **Discount all cash flows (5-year FCF + Terminal Value)** to present value.
+4. **Compute Enterprise Value (EV)** and then adjust it to get Equity Value using:
+   [
+   text{{Equity Value}} = text{{Enterprise Value}} - text{{Net Debt}}
+   ]
+   where Net Debt = Total Debt - Cash (if available, assume 0 if not).
+5. **Determine the intrinsic stock price** using number of shares outstanding (assume a number or request if unknown).
+6. **Summarize the DCF in a table**, showing:
+   - Year
+   - Projected FCF
+   - Present Value of FCF
+   - Cumulative PV
+   - Terminal Value
+   - Enterprise Value
+   - Equity Value
+   - Implied Share Price
+
+Then:
+
+- Provide a concise fundamental analysis of the company's **profitability, efficiency, liquidity, and leverage** using ratios like:
+  - Net Profit Margin
+  - ROE and ROA
+  - Current Ratio and Quick Ratio
+  - Debt-to-Equity
+
+Finally:
+
+- Offer a valuation opinion: Is the stock **undervalued**, **overvalued**, or **fairly valued** relative to its calculated intrinsic value?
+
+Use all available numeric data to justify your answer.
+"""
+
+    return prompt
+
+
+def calculate_fundamental_indicators(financials):
+    # Extract individual statements
+    income_df = financials.get('income_statement', pd.DataFrame()).copy()
+    balance_df = financials.get('balance_sheet', pd.DataFrame()).copy()
+    cashflow_df = financials.get('cash_flow', pd.DataFrame()).copy()
+
+    # Move index to column for merging
+    for df in [income_df, balance_df, cashflow_df]:
+        df['Date'] = df.index
+        df.reset_index(drop=True, inplace=True)
+
+    # Merge on 'Date' across statements
+    df = income_df.merge(balance_df, on='Date', how='outer').merge(cashflow_df, on='Date', how='outer')
+
+    # Avoid divide-by-zero errors
+    df.replace({0: np.nan}, inplace=True)
+
+    # Normalize column names (snake_case for consistent access)
+    df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace(r"[^\w_]", "", regex=True)
+
+    # print("Columns after merge and normalization:")
+    # print(df.columns.tolist())
+
+    # print("\nSample data (first 3 rows):")
+    # print(df[['Date'] + [col for col in df.columns if 'Income' in col or 'Revenue' in col or 'Assets' in col or 'Equity' in col]].head(3))
+
+
+    # === Profitability Ratios ===
+    df['Net_Profit_Margin'] = df['Net_Income_Common_Stockholders'] / df['Total_Revenue']
+    df['Operating_Margin'] = df['Operating_Income'] / df['Total_Revenue']
+    df['Gross_Margin'] = df['Gross_Profit'] / df['Total_Revenue']
+
+    # === Return Ratios ===
+    df['ROA'] = df['Net_Income_Common_Stockholders'] / df['Total_Assets']
+    df['ROE'] = df['Net_Income_Common_Stockholders'] / df['Stockholders_Equity']
+
+    # === Liquidity Ratios ===
+    df['Current_Ratio'] = df['Current_Assets'] / df['Current_Liabilities']
+    df['Quick_Ratio'] = (df['Current_Assets'] - df['Inventory']) / df['Current_Liabilities']
+
+    # === Leverage Ratios ===
+    df['Debt_to_Equity'] = df['Total_Debt'] / df['Stockholders_Equity']
+    df['Debt_to_Assets'] = df['Total_Debt'] / df['Total_Assets']
+
+    # === Cash Flow Ratios ===
+    df['Operating_Cash_Flow_Ratio'] = df['Operating_Cash_Flow'] / df['Current_Liabilities']
+    df['Free_Cash_Flow'] = df['Operating_Cash_Flow'] - df['Capital_Expenditure']
+
+    # df.dropna(inplace=True)
+
+    return df
+
+def generate_fundamental_dcf_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+    recent_data = df_with_fundamentals.tail(4)  # Use last 4 periods (e.g., quarters or years)
+
+    # Format relevant rows to string for visibility in the prompt
+    data_cols = [
+         'Tax_Effect_Of_Unusual_Items', 'Tax_Rate_For_Calcs', 'Normalized_EBITDA', 'Total_Unusual_Items',
+    'Total_Unusual_Items_Excluding_Goodwill', 'Net_Income_From_Continuing_Operation_Net_Minority_Interest',
+    'Reconciled_Depreciation', 'Reconciled_Cost_Of_Revenue', 'EBITDA', 'EBIT', 'Net_Interest_Income',
+    'Interest_Expense', 'Interest_Income', 'Normalized_Income', 'Net_Income_From_Continuing_And_Discontinued_Operation',
+    'Total_Expenses', 'Rent_Expense_Supplemental', 'Total_Operating_Income_As_Reported',
+    'Diluted_Average_Shares', 'Basic_Average_Shares', 'Diluted_EPS', 'Basic_EPS',
+    'Diluted_NI_Availto_Com_Stockholders', 'Net_Income_Common_Stockholders', 'Net_Income',
+    'Net_Income_Including_Noncontrolling_Interests', 'Net_Income_Continuous_Operations',
+    'Tax_Provision', 'Pretax_Income', 'Other_Income_Expense', 'Other_Non_Operating_Income_Expenses',
+    'Special_Income_Charges', 'Gain_On_Sale_Of_Ppe', 'Gain_On_Sale_Of_Business', 'Write_Off',
+    'Impairment_Of_Capital_Assets', 'Restructuring_And_Mergern_Acquisition', 'Earnings_From_Equity_Interest',
+    'Gain_On_Sale_Of_Security', 'Net_Non_Operating_Interest_Income_Expense', 'Interest_Expense_Non_Operating',
+    'Interest_Income_Non_Operating', 'Operating_Income', 'Operating_Expense',
+    'Depreciation_Amortization_Depletion_Income_Statement',
+    'Depreciation_And_Amortization_In_Income_Statement', 'Selling_General_And_Administration',
+    'Gross_Profit', 'Cost_Of_Revenue', 'Total_Revenue', 'Operating_Revenue', 'Treasury_Shares_Number', 'Ordinary_Shares_Number', 'Share_Issued', 'Net_Debt', 'Total_Debt',
+    'Tangible_Book_Value', 'Invested_Capital', 'Working_Capital', 'Net_Tangible_Assets',
+    'Capital_Lease_Obligations', 'Common_Stock_Equity', 'Total_Capitalization',
+    'Total_Equity_Gross_Minority_Interest', 'Stockholders_Equity',
+    'Gains_Losses_Not_Affecting_Retained_Earnings', 'Other_Equity_Adjustments', 'Treasury_Stock',
+    'Retained_Earnings', 'Additional_Paid_In_Capital', 'Capital_Stock', 'Common_Stock',
+    'Preferred_Stock', 'Total_Liabilities_Net_Minority_Interest',
+    'Total_Non_Current_Liabilities_Net_Minority_Interest', 'Other_Non_Current_Liabilities',
+    'Tradeand_Other_Payables_Non_Current', 'Non_Current_Deferred_Liabilities',
+    'Non_Current_Deferred_Revenue', 'Non_Current_Deferred_Taxes_Liabilities',
+    'Long_Term_Debt_And_Capital_Lease_Obligation', 'Long_Term_Capital_Lease_Obligation',
+    'Long_Term_Debt', 'Current_Liabilities', 'Current_Debt_And_Capital_Lease_Obligation',
+    'Current_Capital_Lease_Obligation', 'Current_Debt', 'Other_Current_Borrowings',
+    'Payables_And_Accrued_Expenses', 'Current_Accrued_Expenses', 'Interest_Payable', 'Payables',
+    'Total_Tax_Payable', 'Income_Tax_Payable', 'Accounts_Payable', 'Total_Assets',
+    'Total_Non_Current_Assets', 'Other_Non_Current_Assets', 'Investments_And_Advances',
+    'Long_Term_Equity_Investment', 'Investmentsin_Associatesat_Cost',
+    'Goodwill_And_Other_Intangible_Assets', 'Goodwill', 'Net_PPE', 'Accumulated_Depreciation',
+    'Gross_PPE', 'Other_Properties', 'Machinery_Furniture_Equipment',
+    'Buildings_And_Improvements', 'Land_And_Improvements', 'Properties', 'Current_Assets',
+    'Other_Current_Assets', 'Prepaid_Assets', 'Inventory', 'Receivables', 'Accounts_Receivable',
+    'Cash_Cash_Equivalents_And_Short_Term_Investments', 'Cash_And_Cash_Equivalents', 'Repurchase_Of_Capital_Stock', 'Repayment_Of_Debt', 'Issuance_Of_Debt',
+    'Capital_Expenditure', 'Interest_Paid_Supplemental_Data', 'Income_Tax_Paid_Supplemental_Data',
+    'End_Cash_Position', 'Beginning_Cash_Position', 'Effect_Of_Exchange_Rate_Changes',
+    'Changes_In_Cash', 'Financing_Cash_Flow', 'Cash_Flow_From_Continuing_Financing_Activities',
+    'Net_Other_Financing_Charges', 'Proceeds_From_Stock_Option_Exercised', 'Cash_Dividends_Paid',
+    'Common_Stock_Dividend_Paid', 'Net_Common_Stock_Issuance', 'Common_Stock_Payments',
+    'Net_Issuance_Payments_Of_Debt', 'Net_Short_Term_Debt_Issuance', 'Net_Long_Term_Debt_Issuance',
+    'Long_Term_Debt_Payments', 'Long_Term_Debt_Issuance', 'Investing_Cash_Flow',
+    'Cash_Flow_From_Continuing_Investing_Activities', 'Net_Other_Investing_Changes',
+    'Net_Business_Purchase_And_Sale', 'Sale_Of_Business', 'Purchase_Of_Business',
+    'Net_PPE_Purchase_And_Sale', 'Sale_Of_PPE', 'Capital_Expenditure_Reported',
+    'Operating_Cash_Flow', 'Cash_Flow_From_Continuing_Operating_Activities',
+    'Change_In_Working_Capital', 'Change_In_Other_Working_Capital',
+    'Change_In_Payables_And_Accrued_Expense', 'Change_In_Accrued_Expense', 'Change_In_Payable',
+    'Change_In_Account_Payable', 'Change_In_Tax_Payable', 'Change_In_Income_Tax_Payable',
+    'Change_In_Inventory', 'Change_In_Receivables', 'Changes_In_Account_Receivables',
+    'Other_Non_Cash_Items', 'Stock_Based_Compensation', 'Deferred_Tax', 'Deferred_Income_Tax',
+    'Depreciation_Amortization_Depletion', 'Depreciation_And_Amortization',
+    'Operating_Gains_Losses', 'Gain_Loss_On_Sale_Of_Business', 'Net_Income_From_Continuing_Operations' 
+    ]
+    fundamental_str = recent_data[data_cols].to_string(index=False)
+
+    # Prompt construction
+    prompt = rf"""
+Perform a Discounted Cash Flow (DCF) analysis for {ticker} using the following recent fundamental financial data:
+
+{fundamental_str}
+
+Please:
+
+1. **Project Free Cash Flows (FCF)** for the next 5 years based on historical:
+   \[
+   \\text{{EBIT}} - \\text{{Tax}} - \\text{{Capital\\_Expenditure}} + \\text{{Depreciation\\_and\\_Amortization}} - \\text{{Change\\_in\\_Net\\_Working\\_Capital}}
+   \]
+
+2. **Calculate the Terminal Value** using both:
+   - **Gordon Growth Model** (e.g., long-term growth = 2.5%)
+   - **Exit Multiple Method** (e.g., EBITDA multiple)
+
+   Also, calculate the **Weighted Average Cost of Capital (WACC)**. Show formulas and intermediate steps.
+
+3. **Discount all cash flows** (5-year FCFs + Terminal Value) to present value.
+
+4. **Compute Enterprise Value (EV)**, then determine **Equity Value**:
+   \[
+   \\text{{Equity\_Value}} = \\text{{Enterprise\_Value}} - \\text{{Net\_Debt}}
+   \]
+   Where:
+   - Net Debt = Total Debt - Cash and Cash Equivalents
+
+5. **Determine the intrinsic stock price** by dividing Equity Value by the number of shares:
+   \[
+   \\text{{Intrinsic\_Price}} = \\frac{{\\text{{Equity\_Value}}}}{{\\text{{Ordinary\_Shares\_Number}}}}
+   \]
+
+   Use the value from the `Ordinary_Shares_Number` field in the balance sheet. If missing, ask the user to provide it.
+
+6. **Summarize your DCF in a table**, including:
+   - Year
+   - Projected FCF
+   - Present Value of FCF
+   - Cumulative PV
+   - Terminal Value
+   - Enterprise Value
+   - Equity Value
+   - Implied Share Price
+
+Then:
+
+- Provide a concise **fundamental analysis** using these ratios:
+  - Net Profit Margin
+  - Return on Equity (ROE), Return on Assets (ROA)
+  - Current Ratio, Quick Ratio
+  - Debt-to-Equity
+
+Finally:
+
+- Offer a valuation opinion: Is the stock **undervalued**, **overvalued**, or **fairly valued** relative to its intrinsic value?
+
+Use **all numeric values from the table** to support your answer.
+"""
+
+
+
+    return prompt
+
+if 'MCD' in financial_statements_data:
+    # Extract the raw financials for MCD
+    mcd_financials_raw = financial_statements_data['MCD']
+
+    # Copy and fix the structure so the index becomes a 'Date' column
+    income_df = mcd_financials_raw['Income Statement'].copy()
+    balance_df = mcd_financials_raw['Balance Sheet'].copy()
+    cashflow_df = mcd_financials_raw['Cash Flow'].copy()
+
+    for df in [income_df, balance_df, cashflow_df]:
+        df['Date'] = df.index
+        df.reset_index(drop=True, inplace=True)
+
+    # Reassemble the corrected input structure using lowercase keys
+    mcd_financials_fixed = {
+        'income_statement': income_df,
+        'balance_sheet': balance_df,
+        'cash_flow': cashflow_df
+    }
+
+    # Now safely pass into the calculation function
+    mcd_fundamental_data = calculate_fundamental_indicators(mcd_financials_fixed)
+
+    if not mcd_fundamental_data.empty:
+        ai_dcf_prompt = generate_fundamental_dcf_prompt('MCD', mcd_fundamental_data)
+
+        print("\nAI prompt for Fundamental DCF Analysis ---")
+        print(ai_dcf_prompt)
+    else:
+        print("Cannot generate DCF analysis prompt: MCD fundamental data is empty after processing.")
+else:
+    print("Cannot generate DCF analysis prompt: MCD not found in financial statements data.")
