@@ -58,7 +58,7 @@ if selected_ticker in historical_prices_data:
 print(f"\nHistorical Prices for {selected_ticker} (first 5 rows):")
 if selected_ticker in historical_prices_data:
     print(historical_prices_data[selected_ticker].head())
-example_stock_info = sp500_df_for_screener.loc[selected_ticker].to_string() #IS THIS STILL NEEDED WHEN WE CHANGE AI PACKAGE?
+
 
 
 #some calculations below can be adjusted:
@@ -88,7 +88,7 @@ def calculate_technical_indicators_manual(df):
     df_copy['RSI'] = 100 - (100 / (1 + rs)) #RSI formula, assigned to new col 'RSI'
 
     # calculating Moving Average Convergence Divergence (MACD) 
-    # MACD uses 12-period EMA, 26-period EMA, and 9-period signal line. ? found this online
+    # MACD uses 12-period EMA, 26-period EMA, and 9-period signal line. 
     exp1 = df_copy['Close'].ewm(span=12, adjust=False).mean() #calculates the 12 period Exponential Moving Average (EMA) of close
     exp2 = df_copy['Close'].ewm(span=26, adjust=False).mean() #same but for 26 period
     df_copy['MACD'] = exp1 - exp2 #calculates the MACD line: 26ema- 12ema, and assigns to new col 'MACD'
@@ -108,36 +108,37 @@ se_hist_data_with_indicators = calculate_technical_indicators_manual(selectedtic
 print("{selected_ticker} Historical Data with Technical Indicators (last 5 rows):")#header (not data)
 print(se_hist_data_with_indicators.tail())
 
-def generate_technical_forecast_prompt(selected_ticker: str, df_with_indicators: pd.DataFrame) -> str: #taking stock ticker as a string, and dataframe (should include tech inds), will return string (for ai readbility)
+#NOT NEEDED USE DCF PROMPT
+# def generate_technical_forecast_prompt(selected_ticker: str, df_with_indicators: pd.DataFrame) -> str: #taking stock ticker as a string, and dataframe (should include tech inds), will return string (for ai readbility)
 
-    recent_data = df_with_indicators.tail(10) #making short term forcast so using last 10 lines of df only
+#     recent_data = df_with_indicators.tail(10) #making short term forcast so using last 10 lines of df only
 
-    # Formatting for prompt
-    data_str = recent_data[['Close', 'SMA_20', 'SMA_50', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']].to_string()
+#     # Formatting for prompt
+#     data_str = recent_data[['Close', 'SMA_20', 'SMA_50', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']].to_string()
 
-    prompt = f"""
-Analyze the following recent technical indicator data for {selected_ticker}: 
+#     prompt = f"""
+# Analyze the following recent technical indicator data for {selected_ticker}: 
 
-{data_str}
+# {data_str}
 
-please use the data retrieved in calculate_technical_indicators_manual(selectedticker_hist_data)and help create a discounted cash flow analysis for the company in text format with a final stock price obtained by balancing the equity value with enterprise value and number of shares outstanding
-express your output as a table with the same lines as in dcf please demonstrate the math being used to calculate the terminal value
-Based on this data, provide a concise technical analysis forecast.
+# please use the data retrieved in calculate_technical_indicators_manual(selectedticker_hist_data)and help create a discounted cash flow analysis for the company in text format with a final stock price obtained by balancing the equity value with enterprise value and number of shares outstanding
+# express your output as a table with the same lines as in dcf please demonstrate the math being used to calculate the terminal value
+# Based on this data, provide a concise technical analysis forecast.
 
-Focus on:A
-1.  **Current Trend:** What do the SMAs suggest about the short-term and long-term trend?
-2.  **Momentum:** What does the RSI indicate (overbought/oversold, bullish/bearish divergence)? What about the MACD (crossovers, histogram)?
-3.  **Potential Price Action:** Based on these indicators, what is the most likely immediate future price movement (e.g., bullish, bearish, consolidating)?
-4.  **Key Levels:** Are there any implied support or resistance levels?
+# Focus on:A
+# 1.  **Current Trend:** What do the SMAs suggest about the short-term and long-term trend?
+# 2.  **Momentum:** What does the RSI indicate (overbought/oversold, bullish/bearish divergence)? What about the MACD (crossovers, histogram)?
+# 3.  **Potential Price Action:** Based on these indicators, what is the most likely immediate future price movement (e.g., bullish, bearish, consolidating)?
+# 4.  **Key Levels:** Are there any implied support or resistance levels?
 
-Be specific and use the indicator values to support your analysis.
-"""
-    return prompt #PROMPT NEEDS TO BE ADJUSTED FOR OUR NEEDS THIS IS A SAMPLE
+# Be specific and use the indicator values to support your analysis.
+# """
+#     return prompt #PROMPT NEEDS TO BE ADJUSTED FOR OUR NEEDS THIS IS A SAMPLE
 
-ai_tech_prompt = generate_technical_forecast_prompt(selected_ticker, se_hist_data_with_indicators)
+# ai_tech_prompt = generate_technical_forecast_prompt(selected_ticker, se_hist_data_with_indicators)
 
-print("\nAI prompt for Technical Analysis")
-print(ai_tech_prompt)
+# print("\nAI prompt for Technical Analysis")
+# print(ai_tech_prompt)
 
 
 
@@ -356,7 +357,9 @@ Please:
 
    Use the value from the `Ordinary_Shares_Number` field in the balance sheet. If missing, ask the user to provide it.
 
-6. **Summarize your DCF in a table**, including:
+   
+
+6. **Summarize your DCF in a CSV formatted table**. Do not include any other text before or after the CSV data, only the CSV. include the following columns in the CSV table:
    - Year
    - Projected FCF
    - Present Value of FCF
@@ -366,7 +369,7 @@ Please:
    - Equity Value
    - Implied Share Price
 
-Then:
+Then, in a **separate section below the CSV table**:
 
 - Provide a concise **fundamental analysis** using these ratios:
   - Net Profit Margin
@@ -374,7 +377,7 @@ Then:
   - Current Ratio, Quick Ratio
   - Debt-to-Equity
 
-Finally:
+Finally, in another **separate section**::
 
 - Offer a valuation opinion: Is the stock **undervalued**, **overvalued**, or **fairly valued** relative to its intrinsic value?
 
@@ -434,4 +437,41 @@ def call_ollama(prompt, model='gemma3'):
 # Example usage
 reply = call_ollama(ai_dcf_prompt)
 print(reply)
+ 
+ #//////trying to print excel sheet with DCF analysis and fundamental analysis/////
+import io
+try:
+    # Split the reply into lines
+    reply_lines = reply.strip().split('\n') #removes any whitespace (like spaces, tabs, newlines) from the AI's reply string and splits the cleaned reply string into a list of individual strings, where each element in the list is a line from the AI's response
 
+    # Starting with CSV data (even if ai adds some text before it)
+    csv_start_index = -1 #line before csv data
+    for i, line in enumerate(reply_lines): 
+        if 'Year,Projected FCF,' in line or 'Year, Projected FCF,' in line: #checks if the current line contains the expected start the CSV (header) 
+            csv_start_index = i
+            break
+
+    if csv_start_index != -1: #check if header found for CSV data
+        csv_content = '\n'.join(reply_lines[csv_start_index:]) # creates a new list containing all lines from the detected csv_start_index to the end of the reply_lines list - removes any text before the CSV data (if ai adds any)  and joins all the lines in the new list back into a single string, each line separated by \n
+        if csv_content.startswith('```csv') and csv_content.endswith('```'): 
+            csv_content = csv_content[6:-3].strip() # Remove ```csv and ``` trying to remove any markdown delmiters if AI used them
+
+        dcf_df = pd.read_csv(io.StringIO(csv_content)) #wraps csv_content in an in-memory text buffer. This makes the string behave like a file, which is what pd.read_csv expects as input then reads the CSV data from the StringIO object and converts it into a dataframe
+        print("\nDCF Analysis Table (from AI output, as datframe)")
+        print(dcf_df)
+
+        #Save as an Excel file
+        excel_filename = f"{selected_ticker}_DCF_Analysis.xlsx"
+        dcf_df.to_excel(excel_filename, index=False) #uses pandas to save df to excel 
+        print(f"\nDCF analysis saved to {excel_filename}")
+
+# We then need to extract the qualitative analysis/wordy parts separately
+# I have nto done that yet
+
+    else:
+        print("Could not find CSV data in AI's response.")
+        print("Full AI response:\n", reply)
+
+except Exception as e:
+    print(f"Error processing AI's DCF response: {e}")
+    print("Full AI response:\n", reply)
