@@ -1,4 +1,4 @@
-import ollama
+import requests
 import pandas as pd
 
 def build_prompt(user_preference: str, company_df: pd.DataFrame) -> str:
@@ -26,36 +26,22 @@ Follow these constraints strictly. No paragraphs, no external data, no assumptio
 """
     return prompt
 
-def query_llm(prompt: str) -> str:
-    response = ollama.chat(
-        model='gemma:latest',  # Make sure this matches your local model
-        messages=[{'role': 'user', 'content': prompt}],
-        stream=False
+import requests
+
+def query_llm_stream(prompt: str, model='gemma:latest') -> str:
+    response = requests.post(
+        'http://localhost:11434/api/generate',
+        json={'model': model, 'prompt': prompt, 'stream': True},
+        stream=True
     )
-    return response['message']['content']
-from ai_engine import build_prompt, query_llm
-import pandas as pd
 
-# User preference
-user_pref = "I'm looking for US-based companies with low volatility and good long-term growth."
-
-# Sample company data (replace with your full dataset later)
-data = {
-    "Symbol": ["OKE", "CVX", "KMI"],
-    "Company Name": ["Oneok", "Chevron Corporation", "Kinder Morgan"],
-    "Ethics Score": [3, 4, 3],
-    "Volatility Score": [4, 3, 3],
-    "Growth Score": [4, 4, 4],
-}
-energy_df = pd.DataFrame(data)
-
-# Build the prompt from user input + data
-prompt = build_prompt(user_pref, energy_df)
-
-# Query the LLM (Gemma) via Ollama
-output = query_llm(prompt)
-
-# Print result
-print(output)
-
-
+    result = ""
+    for line in response.iter_lines():
+        if line:
+            try:
+                json_line = line.decode("utf-8")
+                chunk = eval(json_line)  # Better: use json.loads(json_line) if valid JSON
+                result += chunk.get("response", "")
+            except Exception as e:
+                print(f"Error parsing line: {e}")
+    return result
