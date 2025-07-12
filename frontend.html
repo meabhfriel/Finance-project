@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>总统身高分析</title>
+</head>
+<body>
+  <h1>AI分析</h1>
+  <button onclick="getAnalysis()">获取分析</button>
+  <pre id="result"></pre>
+
+  <script>
+    async function getAnalysis() {
+      const res = await fetch('http://127.0.0.1:8000/analyze');
+      const data = await res.json();
+      document.getElementById('result').innerText = data.reply;
+    }
+  </script>
+</body>
+</html>

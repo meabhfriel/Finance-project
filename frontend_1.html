@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Energy Stock Analysis AI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 30px;
+            background-color: #f4f4f9;
+        }
+        h1 {
+            color: #333;
+        }
+        textarea {
+            width: 100%;
+            height: 80px;
+            margin-bottom: 10px;
+            padding: 10px;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #result {
+            margin-top: 20px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: #fff;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: center;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        caption {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Energy Stock Analysis AI</h1>
+    <p>Enter your investment preference:</p>
+    <textarea id="preference" placeholder="e.g. I want low volatility, high ethics US companies"></textarea>
+    <br>
+    <button onclick="analyze()">Analyze Stocks</button>
+
+    <div id="result">AI analysis result will appear here...</div>
+
+    <script>
+        async function analyze() {
+            const userPref = document.getElementById('preference').value.trim();
+            if (!userPref) {
+                alert('Please enter your investment preference.');
+                return;
+            }
+
+            document.getElementById('result').innerHTML = '<p>Analyzing... Please wait...</p>';
+
+            try {
+                const response = await fetch('http://localhost:8000/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ preference: userPref })
+                });
+
+                const data = await response.json();
+                const markdown = data.reply;
+
+                const htmlTable = parseMarkdownTable(markdown);
+                document.getElementById('result').innerHTML = htmlTable || '<pre>' + markdown + '</pre>';
+            } catch (error) {
+                document.getElementById('result').innerHTML = '<p style="color:red;">Error: ' + error.message + '</p>';
+            }
+        }
+
+        function parseMarkdownTable(markdown) {
+            const lines = markdown.trim().split('\n');
+            const tableLines = lines.filter(line => line.includes('|'));
+            if (tableLines.length < 3) return null;
+
+            const headers = tableLines[0].split('|').map(h => h.trim()).filter(h => h);
+            const rows = tableLines.slice(2).map(line => line.split('|').map(cell => cell.trim()).filter(c => c));
+
+            let html = '<table><caption>AI Analysis Result</caption><thead><tr>';
+            headers.forEach(h => html += `<th>${h}</th>`);
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(row => {
+                if (row.length === headers.length) {
+                    html += '<tr>';
+                    row.forEach(cell => html += `<td>${cell}</td>`);
+                    html += '</tr>';
+                }
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+    </script>
+</body>
+</html>
