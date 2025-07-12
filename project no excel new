@@ -1,0 +1,482 @@
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import re
+
+selected_ticker = 'OKE' # <--- CHANGE THIS to the stock ticker you want to analyze
+all_companies_data = {}
+print(f"Analyzing selected ticker: {selected_ticker}")
+historical_prices_data = {}
+financial_statements_data = {}
+
+
+
+def calculate_fundamental_indicators(financials):
+
+    income_df = financials.get('income_statement', pd.DataFrame()).copy()
+    balance_df = financials.get('balance_sheet', pd.DataFrame()).copy()
+    cashflow_df = financials.get('cash_flow', pd.DataFrame()).copy()
+
+    for df_stmt in [income_df, balance_df, cashflow_df]:
+        if 'Date' not in df_stmt.columns and isinstance(df_stmt.index, pd.DatetimeIndex):
+            df_stmt['Date'] = df_stmt.index
+            df_stmt.reset_index(drop=True, inplace=True)
+
+    df = income_df.merge(balance_df, on='Date', how='outer').merge(cashflow_df, on='Date', how='outer')
+    df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace(r"[^\w_]", "", regex=True)
+
+    # Convert object columns that should be numeric to numeric, coercing errors
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            try:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            except ValueError:
+                pass # Not all object columns are meant to be numeric
+
+    df.replace({0: np.nan}, inplace=True) # Replace explicit zeros with NaN for calculations
+
+    # Ensure other crucial columns exist for ratios and DCF, setting to NaN if not
+    cols_to_check = [
+        'Operating_Cash_Flow', 'Capital_Expenditure', 'Net_Income_Common_Stockholders', 'Total_Revenue',
+        'Operating_Income', 'Gross_Profit', 'Total_Assets', 'Stockholders_Equity',
+        'Current_Assets', 'Current_Liabilities', 'Inventory', 'Total_Debt',
+        'Cash_And_Cash_Equivalents', 'Ordinary_Shares_Number', 'EBITDA',
+        'Interest_Expense', 'Tax_Provision', 'Pretax_Income'
+    ]
+    for col in cols_to_check:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    # === Profitability Ratios ===
+    df['Net_Profit_Margin'] = df['Net_Income_Common_Stockholders'] / df['Total_Revenue']
+    df['Operating_Margin'] = df['Operating_Income'] / df['Total_Revenue']
+    df['Gross_Margin'] = df['Gross_Profit'] / df['Total_Revenue']
+
+    # === Return Ratios ===
+    df['ROA'] = df['Net_Income_Common_Stockholders'] / df['Total_Assets']
+    df['ROE'] = df['Net_Income_Common_Stockholders'] / df['Stockholders_Equity']
+
+    # === Liquidity Ratios ===
+    df['Current_Ratio'] = df['Current_Assets'] / df['Current_Liabilities']
+    df['Quick_Ratio'] = (df['Current_Assets'] - df['Inventory']) / df['Current_Liabilities']
+
+    # === Leverage Ratios ===
+    df['Debt_to_Equity'] = df['Total_Debt'] / df['Stockholders_Equity']
+    df['Debt_to_Assets'] = df['Total_Debt'] / df['Total_Assets']
+
+    # === Cash Flow Ratios ===
+    df['Operating_Cash_Flow_Ratio'] = df['Operating_Cash_Flow'] / df['Current_Liabilities']
+    df['Free_Cash_Flow'] = df['Operating_Cash_Flow'] - df['Capital_Expenditure']
+
+    return df
+
+def dcf_parameters_calculator(ticker_info: dict, fundamental_data_df: pd.DataFrame):
+    """
+    Calculates or defines key DCF parameters: WACC, Terminal Growth Rate, and Exit Multiple.
+    These calculations rely on yfinance info, processed financial data, and external assumptions.
+    """
+    params = {
+        'terminal_growth_rate': np.nan,
+        'exit_multiple_value': np.nan,
+        'calculated_wacc': np.nan,
+        'calculated_net_debt': np.nan,
+        'calculated_shares_outstanding': np.nan,
+        'wacc_breakdown': {} 
+    }
+
+    # Net Debt and Shares Outstanding (from existing data)
+    if not fundamental_data_df.empty:
+        latest_data = fundamental_data_df.iloc[-1] # Use the most recent period
+
+        # Net Debt = Total Debt - Cash (assuming Cash_And_Cash_Equivalents is Cash)
+        total_debt = latest_data.get('Total_Debt', np.nan)
+        cash_equiv = latest_data.get('Cash_And_Cash_Equivalents', np.nan)
+        if not pd.isna(total_debt):
+            params['calculated_net_debt'] = total_debt - (cash_equiv if not pd.isna(cash_equiv) else 0)
+        elif 'Net_Debt' in latest_data and not pd.isna(latest_data['Net_Debt']):
+             params['calculated_net_debt'] = latest_data['Net_Debt']
+
+        # Shares Outstanding
+        params['calculated_shares_outstanding'] = ticker_info.get('sharesOutstanding', np.nan)
+        if pd.isna(params['calculated_shares_outstanding']) and 'Ordinary_Shares_Number' in latest_data:
+             params['calculated_shares_outstanding'] = latest_data['Ordinary_Shares_Number']
+
+    # WACC Calculation
+    try:
+        # Market Value of Equity (E)
+        market_cap = ticker_info.get('marketCap')
+        if not pd.isna(market_cap) and market_cap > 0:
+            E = market_cap
+            params['wacc_breakdown']['Market_Value_Equity'] = E
+        else:
+            E = np.nan
+
+        # Market Value of Debt (D) - Use latest Total_Debt
+        D = total_debt if not pd.isna(total_debt) else np.nan
+        params['wacc_breakdown']['Market_Value_Debt'] = D
+
+        V = E + D
+        params['wacc_breakdown']['Total_Capital_Value'] = V
+
+        if not pd.isna(V) and V > 0:
+            #I have assumed fixed value for simplicity.
+            Rf = 0.045 # A common conservative assumption (4.5%)
+            params['wacc_breakdown']['Risk_Free_Rate'] = Rf
+
+            # Market Risk Premium (Rm - Rf): Common assumption (e.g., 5.5% - 6.5%)
+            Market_Risk_Premium = 0.055 # Common assumption (5.5%)
+            params['wacc_breakdown']['Market_Risk_Premium'] = Market_Risk_Premium
+
+            # Beta (B)
+            beta = ticker_info.get('beta')
+            if pd.isna(beta) or beta == 0: # Handle cases where beta is missing or zero
+                beta = 1.0 # Assume market beta if not available
+            params['wacc_breakdown']['Beta'] = beta
+
+            Re = Rf + beta * Market_Risk_Premium
+            params['wacc_breakdown']['Cost_of_Equity_Re'] = Re
+
+            # Cost of Debt (Rd) - Using latest Interest Expense and Total Debt
+            interest_expense = latest_data.get('Interest_Expense', np.nan)
+            if not pd.isna(total_debt) and total_debt > 0 and not pd.isna(interest_expense):
+                Rd = interest_expense / total_debt
+            else:
+                Rd = 0.05 # Default if cannot calculate (e.g., 5%)
+            params['wacc_breakdown']['Cost_of_Debt_Rd'] = Rd
+
+            # Corporate Tax Rate (Tc)
+            tax_provision = latest_data.get('Tax_Provision', np.nan)
+            pretax_income = latest_data.get('Pretax_Income', np.nan)
+            if not pd.isna(tax_provision) and not pd.isna(pretax_income) and pretax_income != 0:
+                Tc = tax_provision / pretax_income
+                # Cap tax rate at a reasonable maximum, as it can be distorted by one-offs
+                Tc = min(Tc, 0.25) if Tc > 0 else 0 # Ensure positive and capped
+            else:
+                Tc = 0.21 # Default US corporate tax rate (21% as per Tax Cuts and Jobs Act of 2017)
+            params['wacc_breakdown']['Corporate_Tax_Rate_Tc'] = Tc
+
+            # Calculate WACC
+            if not pd.isna(E) and not pd.isna(D) and V > 0:
+                equity_weight = E / V
+                debt_weight = D / V
+                params['calculated_wacc'] = (equity_weight * Re) + (debt_weight * Rd * (1 - Tc))
+            else:
+                params['calculated_wacc'] = np.nan # Cannot calculate if E or D is missing
+
+    except Exception as e:
+        print(f"Error calculating WACC: {e}")
+        params['calculated_wacc'] = np.nan
+
+    # Terminal Growth Rate (g)
+    params['terminal_growth_rate'] = 0.025 # assumption (2.5% is a common long-term growth rate for mature companies)
+
+    # Exit Multiple Value
+    params['exit_multiple_value'] = 10.0 # also common assumption for EV/EBITDA multiple (10x)
+
+    print("\nDCF Parameter Calculation Summary")
+    print(f"Terminal Growth Rate: {params['terminal_growth_rate']:.1%}")
+    print(f"Exit Multiple (EV/EBITDA): {params['exit_multiple_value']:.1f}x")
+    print(f"Calculated Net Debt: ${params['calculated_net_debt']:,.0f}" if not pd.isna(params['calculated_net_debt']) else "Calculated Net Debt: N/A")
+    print(f"Shares Outstanding: {params['calculated_shares_outstanding']:,.0f}" if not pd.isna(params['calculated_shares_outstanding']) else "Shares Outstanding: N/A")
+    print("WACC Breakdown:")
+    for key, value in params['wacc_breakdown'].items():
+        if isinstance(value, float):
+            if 'Rate' in key or 'Premium' in key or 'Cost_of' in key or 'Tax_Rate' in key:
+                print(f"  {key.replace('_', ' ')}: {value:.2%}")
+            else:
+                print(f"  {key.replace('_', ' ')}: ${value:,.0f}")
+        else:
+            print(f"  {key.replace('_', ' ')}: {value}")
+    print(f"Calculated WACC: {params['calculated_wacc']:.2%}" if not pd.isna(params['calculated_wacc']) else "Calculated WACC: N/A (check WACC breakdown for issues)")
+    return params
+
+def generate_fundamental_dcf_prompt(
+    ticker: str,
+    df_with_fundamentals: pd.DataFrame,
+    terminal_growth_rate: float,
+    exit_multiple_value: float,
+    calculated_wacc: float,
+    calculated_net_debt: float,
+    calculated_shares_outstanding: float
+) -> str:
+    recent_data = df_with_fundamentals.tail(4)  # Use last 4 periods (e.g., quarters or years)
+
+    # I've majorly cut downthis list to focus on onlu some relevant items for DCF to see if it helps with ai outcome to not overwhelm ai model
+
+    data_cols = [
+        'Total_Revenue', 'Net_Income_Common_Stockholders', 'Operating_Income', 'Gross_Profit',
+        'Operating_Cash_Flow', 'Capital_Expenditure', 'Free_Cash_Flow', 'EBITDA',
+        'Interest_Expense', 'Tax_Provision', 'Pretax_Income',
+        'Total_Assets', 'Stockholders_Equity', 'Total_Debt', 'Current_Assets',
+        'Current_Liabilities', 'Inventory', 'Cash_And_Cash_Equivalents', 'Ordinary_Shares_Number'
+    ]
+    available_data_cols = [col for col in data_cols if col in recent_data.columns]
+    fundamental_str = recent_data[available_data_cols].to_string(index=False)
+
+    # Convert numeric parameters to strings for prompt, handling NaN
+    terminal_growth_rate_str = f"{terminal_growth_rate * 100:.1f}%" if not pd.isna(terminal_growth_rate) else "NOT PROVIDED"
+    exit_multiple_value_str = f"{exit_multiple_value:.1f}x" if not pd.isna(exit_multiple_value) else "NOT PROVIDED"
+    wacc_str = f"{calculated_wacc * 100:.1f}%" if not pd.isna(calculated_wacc) else "NOT PROVIDED"
+    net_debt_str = f"${calculated_net_debt:,.0f}" if not pd.isna(calculated_net_debt) else "NOT PROVIDED"
+    shares_outstanding_str = f"{calculated_shares_outstanding:,.0f}" if not pd.isna(calculated_shares_outstanding) else "NOT PROVIDED"
+
+    # Prompt construction
+    prompt = rf"""
+Perform a Discounted Cash Flow (DCF) analysis for {ticker} using the following recent fundamental financial data:
+**Crucially, use ONLY the financial data provided below and the EXPLICITLY GIVEN PARAMETERS. DO NOT assume, estimate, or infer ANY figures or values not explicitly provided. If a required figure for a calculation is not explicitly provided, you MUST state that it cannot be calculated for that specific step and proceed only with what is available.**
+
+Financial Data (DO NOT use any other data):
+{fundamental_str}
+
+
+Given Parameters for DCF (DO NOT use any other values for these metrics):
+- **Terminal Growth Rate (g)**: {terminal_growth_rate_str}
+- **Exit Multiple**: {exit_multiple_value_str} (EBITDA multiple)
+- **Weighted Average Cost of Capital (WACC)**: {wacc_str}
+- **Net Debt**: {net_debt_str}
+- **Ordinary Shares Number**: {shares_outstanding_str}
+
+Please follow these steps rigorously:
+
+1. **Project Free Cash Flows (FCF)** for the next 5 years.
+    * **Strictly use the 'Free_Cash_Flow' data provided in the 'Financial Data' section.**
+    * Calculate the average annual growth rate of 'Free_Cash_Flow' from the *provided historical data only*. If there are fewer than two 'Free_Cash_Flow' data points provided or the historical growth cannot be definitively calculated from *only* the provided data, then assume a **constant FCF for projections equal to the latest provided 'Free_Cash_Flow'**.
+    * If 'Free_Cash_Flow' is entirely missing or cannot be identified from the provided `fundamental_str`, you MUST state that FCF cannot be projected and cease further DCF calculations.
+
+2. **Calculate the Terminal Value** using both:
+    * **Gordon Growth Model (GGM):** Use the formula:
+        $ \text{{Terminal Value (GGM)}} = \frac{{\text{{FCF}}_{{\text{{Last Projected Year}}}} * (1 + g)}}{{(\text{{WACC}} - g)}} $
+        Use the *provided* Terminal Growth Rate ('g') and WACC. Show the exact numerical calculation with the specific values used from the provided parameters. If FCF for the last projected year, 'g', or 'WACC' is unavailable, state that the Gordon Growth Model cannot be calculated.
+    * **Exit Multiple Method (EM):** Use the formula:
+        $ \text{{Terminal Value (EM)}} = \text{{EBITDA}}_{{\text{{Last Projected Year}}}} * \text{{Exit Multiple}} $
+        Use the *provided* Exit Multiple. Project EBITDA for the last projected year using the average growth rate of 'EBITDA' from the *provided historical data only*. If historical EBITDA growth cannot be definitively calculated, use the latest provided 'EBITDA' as a constant for projection. If 'EBITDA' for the last projected year or the Exit Multiple is unavailable, state that the Exit Multiple Method cannot be calculated.
+
+    Also, calculate the **Weighted Average Cost of Capital (WACC)**. Show formulas and intermediate steps.
+
+3. **Discount all cash flows** (5-year Projected FCFs and Terminal Value) to their Present Value using the *provided* WACC.
+    * For each projected FCF_t and for the Terminal Value (TV):
+        $ \text{{PV}} = \frac{{\text{{Cash Flow}}_{{t}}}}{{(1 + \text{{WACC}})^t}} $
+    * Show the exact mathematical calculation for each discounted cash flow.
+
+4.  **Compute Enterprise Value (EV)** and then determine **Equity Value**:
+    * **Enterprise Value (EV)** = Sum of Present Values of 5-year FCFs + Present Value of Terminal Value.
+    * **For Terminal Value in EV calculation**: If both GGM and EM are calculable, use the Gordon Growth Model Terminal Value. If only one is calculable, use that one. If neither is calculable, state that EV cannot be calculated.
+    * **Equity Value** = Enterprise Value - Net Debt.
+    * Use the *provided* Net Debt. If Enterprise Value is not calculable, or if Net Debt is "NOT PROVIDED", state that Equity Value cannot be fully calculated.
+
+5.  **Determine the intrinsic stock price**:
+* $ \text{{Intrinsic Price}} = \frac{{\text{{Equity Value}}}}{{\text{{Ordinary Shares Number}}}} $
+    * Use the *provided* Ordinary Shares Number. If Equity Value is not calculable, or if Ordinary Shares Number is "NOT PROVIDED", state that the intrinsic stock price cannot be determined.
+
+
+    **Discounted Cash Flow (DCF) Analysis Summary Table:**
+(Populate this table *only* with figures derived directly from your calculations based on the provided data. If any cell cannot be calculated due to missing data or inability to derive from the provided information, fill it with 'N/A' or 'Cannot Calculate'.)
+
+| Year | Projected FCF | Present Value of FCF | Cumulative PV | Terminal Value (Gordon Growth) | Terminal Value (Exit Multiple) | Enterprise Value | Equity Value | Implied Share Price |
+|------|----------------|-----------------------|---------------|--------------------------------|--------------------------------|------------------|--------------|---------------------|
+|      |                |                       |               |                                |                                |                  |              |                     |
+|      |                |                       |               |                                |                                |                  |              |                     |
+|      |                |                       |               |                                |                                |                  |              |                     |
+|      |                |                       |               |                                |                                |                  |              |                     |
+|      |                |                       |               |                                |                                |                  |              |                     |
+| TV   | N/A            | [PV of TV]            | N/A           | [Calculated TV GGM]            | [Calculated TV EM]             |                  |              |                     |
+| **Summary** | N/A    | N/A                   | N/A           | N/A                            | N/A                            | [Calculated EV]  | [Calculated Equity Value] | [Calculated Intrinsic Price] |
+
+---
+**Fundamental Analysis (Ratios):**
+Provide a concise fundamental analysis using **only** the following ratios that can be **directly and completely** calculated from the *provided "Financial Data"*. For each ratio discussed, explicitly state the formula used and the numerical input values taken *directly from the provided `fundamental_str`*. Present these insights in clear, descriptive paragraphs. **DO NOT calculate or discuss any ratios for which you lack the direct input figures in the provided data.**
+- Net Profit Margin
+- Return on Equity (ROE)
+- Return on Assets (ROA)
+- Current Ratio
+- Quick Ratio
+- Debt-to-Equity
+- Operating Cash Flow Ratio
+
+
+**Valuation Opinion:**
+Offer a clear valuation opinion: Is the stock **undervalued**, **overvalued**, or **fairly valued** relative to its intrinsic value? This opinion **MUST be based strictly on the calculated intrinsic price from the DCF and the insights derived *only* from the provided financial data and calculated ratios.** **DO NOT introduce any external market data (e.g., current market price), external assumptions, or common knowledge about the company or industry.** Explain your reasoning concisely, referring *only* to the results of the DCF and fundamental analysis derived *solely* from the provided data.
+"""
+    return prompt
+
+# --- END: Required Helper Functions ---
+
+
+print(f"Fetching detailed data for {selected_ticker} via yfinance...")
+try: #using try in case data not available for one of the tickers - so program wont crash, it will go to the except line
+    stock = yf.Ticker(selected_ticker)
+
+    # 1. Fetch Company Info (for Stock Screener)
+    info = stock.info
+    all_companies_data[selected_ticker] = {
+        'Name': info.get('longName', 'N/A'), #returns 'N/A' if 'longname'/any other info doesn't exist
+        'Sector': info.get('sector', 'N/A'),
+        'Industry': info.get('industry', 'N/A'),
+        'MarketCap': info.get('marketCap', 'N/A'),
+        'PE_Ratio': info.get('trailingPE', 'N/A'),
+        'DividendYield': info.get('dividendYield', 'N/A'),
+        'RevenueGrowth': info.get('revenueGrowth', 'N/A'), # TTM revenue growth?
+        'ProfitMargin': info.get('profitMargins', 'N/A'), # TTM profit margins?
+        'DebtToEquity': info.get('debtToEquity', 'N/A'),
+        'CurrentRatio': info.get('currentRatio', 'N/A'),
+        'ReturnOnEquity': info.get('returnOnEquity', 'N/A'),
+    }
+
+    # 2. Stock Price data
+    hist = stock.history(period="1y") #can change to a different period?
+    historical_prices_data[selected_ticker] = hist
+
+
+    # Raw financial statements
+    # Transpose to have Date as index, then copy. Ensure correct column names for `calculate_fundamental_indicators`
+    income_stmt_df = stock.financials.T
+    income_stmt_df.index.name = 'Date' # Set index name
+    balance_sheet_df = stock.balance_sheet.T
+    balance_sheet_df.index.name = 'Date'
+    cash_flow_df = stock.cashflow.T
+    cash_flow_df.index.name = 'Date'
+
+    financial_statements_data[selected_ticker] = {
+        'Income Statement': income_stmt_df,
+        'Balance Sheet': balance_sheet_df,
+        'Cash Flow': cash_flow_df
+    }
+
+
+    print(f"Successfully fetched data for {selected_ticker}")
+
+except Exception as e: #assigns any errors to variable e
+    print(f"Could not fetch data for {selected_ticker}: {e}") #prints error for us
+
+sp500_df_for_screener = pd.DataFrame.from_dict(all_companies_data, orient='index') #converts dictionary to pandas data frame (from #1 company info)
+
+print("\nQuick summary of data")
+print(f"\n{selected_ticker} Data (first 5 rows):")
+print(sp500_df_for_screener.head())
+
+print(f"\nHistorical Prices for {selected_ticker} (first 5 rows):")
+if selected_ticker in historical_prices_data:
+    print(historical_prices_data[selected_ticker].head())
+
+# This seems like a duplicate print, keeping it as it was in your original code
+print(f"\nHistorical Prices for {selected_ticker} (first 5 rows):")
+if selected_ticker in historical_prices_data:
+    print(historical_prices_data[selected_ticker].head())
+
+
+#some calculations below can be adjusted:
+def calculate_technical_indicators_manual(df):
+
+    if 'Close' not in df.columns: #checking that we even have close prices
+        print("DataFrame must contain a 'Close' column for technical analysis.")
+        return df.copy() # if no close prices it just returnes a copy of the original dataframe
+
+    # working on a new object, so not to change original dataframe
+    df_copy = df.copy()
+
+    # Calculating moving averages:
+    df_copy['SMA_20'] = df_copy['Close'].rolling(window=20).mean() #sma - can change window if needed
+    df_copy['SMA_50'] = df_copy['Close'].rolling(window=50).mean() #lma - ""
+
+    # Calculating Relative Strength Index (RSI)
+    window_length = 14
+    delta = df_copy['Close'].diff() #difference between the current close and the previous close = daily price change
+    gain = delta.where(delta > 0, 0) #This creates a Series where values are positive price changes (gains), and 0 otherwise.
+    loss = -delta.where(delta < 0, 0) # This creates a Series where values are positive price losses (negative delta made positive), and 0 otherwise.
+
+    avg_gain = gain.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the Exponential Weighted Moving Average (EWMA) of the gain values.
+    avg_loss = loss.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the EWMA of the loss values
+
+    rs = avg_gain / avg_loss #calculates the relative strength, which is the ratio of average gains to average losses - if avg loss=0, you will get Nan/Inf becuase of division by 0.
+    df_copy['RSI'] = 100 - (100 / (1 + rs)) #RSI formula, assigned to new col 'RSI'
+
+    # calculating Moving Average Convergence Divergence (MACD)
+    # MACD uses 12-period EMA, 26-period EMA, and 9-period signal line.
+    exp1 = df_copy['Close'].ewm(span=12, adjust=False).mean() #calculates the 12 period Exponential Moving Average (EMA) of close
+    exp2 = df_copy['Close'].ewm(span=26, adjust=False).mean() #same but for 26 period
+    df_copy['MACD'] = exp1 - exp2 #calculates the MACD line: 26ema- 12ema, and assigns to new col 'MACD'
+    df_copy['MACD_Signal'] = df_copy['MACD'].ewm(span=9, adjust=False).mean() #signal line: 9-period EMA of the MACD line itself
+    df_copy['MACD_Hist'] = df_copy['MACD'] - df_copy['MACD_Signal'] #dif between MACD and signal
+
+    df_copy.dropna(inplace=True) #lots of NaN at beginning  of indicator calcs before suff data
+
+    return df_copy #new data frame with techn indicators (and no NaNs)
+
+selectedticker_hist_data = historical_prices_data[selected_ticker].copy()
+
+    # Using function above
+se_hist_data_with_indicators = calculate_technical_indicators_manual(selectedticker_hist_data)
+
+    # Print the tail (last few rows) to see the new indicator columns
+print(f"{selected_ticker} Historical Data with Technical Indicators (last 5 rows):")#header (not data)
+print(se_hist_data_with_indicators.tail())
+
+
+##
+##
+##       dcf code
+##
+##
+
+if selected_ticker in financial_statements_data:
+    # Extract the raw financials for the selected ticker
+    selected_ticker_financials_raw = financial_statements_data[selected_ticker]
+
+    # Copy and fix the structure so the index becomes a 'Date' column
+    # Ensure keys match those expected by calculate_fundamental_indicators
+    income_df = selected_ticker_financials_raw['Income Statement'].copy()
+    balance_df = selected_ticker_financials_raw['Balance Sheet'].copy()
+    cash_flow_df = selected_ticker_financials_raw['Cash Flow'].copy()
+
+    # The calculate_fundamental_indicators function handles the 'Date' column and reset_index,
+    # so we just need to pass the DataFrames in the correct dictionary format.
+    selected_ticker_financials_fixed = {
+        'income_statement': income_df,
+        'balance_sheet': balance_df,
+        'cash_flow': cash_flow_df
+    }
+
+    # Now safely pass into the calculation function
+    selected_ticker_fundamental_data = calculate_fundamental_indicators(selected_ticker_financials_fixed)
+
+    if not selected_ticker_fundamental_data.empty:
+        # CALL THE NEW DCF PARAMETERS FUNCTION HERE
+        dcf_params = dcf_parameters_calculator(info, selected_ticker_fundamental_data)
+
+        # Now pass these calculated parameters to your prompt generation function
+        ai_dcf_prompt = generate_fundamental_dcf_prompt(
+            selected_ticker,
+            selected_ticker_fundamental_data,
+            terminal_growth_rate=dcf_params['terminal_growth_rate'],
+            exit_multiple_value=dcf_params['exit_multiple_value'],
+            calculated_wacc=dcf_params['calculated_wacc'],
+            calculated_net_debt=dcf_params['calculated_net_debt'],
+            calculated_shares_outstanding=dcf_params['calculated_shares_outstanding']
+        )
+
+        print("\nAI prompt for Fundamental DCF Analysis ---")
+        print(ai_dcf_prompt)
+    else:
+        print(f"Cannot generate DCF analysis prompt: {selected_ticker} fundamental data is empty after processing.")
+else:
+    print(f"Cannot generate DCF analysis prompt: {selected_ticker} not found in financial statements data.")
+
+
+import requests
+
+def call_ollama(prompt, model='gemma3'):
+    response = requests.post(
+        'http://localhost:11434/api/generate',
+        json={
+            'model': model,
+            'prompt': prompt,
+            'stream': False # Set to True if you want to handle streaming responses
+        }
+    )
+    response.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
+    return response.json()['response']
+
+# Example usage
+#reply = call_ollama(ai_dcf_prompt)
+#print(reply)
+# Just commented out so my computer doesnt die someone else pls test it
