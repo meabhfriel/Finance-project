@@ -12,8 +12,7 @@ User request:
 
 
 Instructions:
-1. Evaluate each company based on relevant factors in the user request (0–5).
-2. Score each factor, sum them up.
+1. Evaluate each company based on relevant factors in the user request.
 3. Show only the top 3 companies.
 4. Return this table:
 
