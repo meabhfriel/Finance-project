@@ -62,149 +62,95 @@ if selected_ticker in historical_prices_data:
 example_stock_info = sp500_df_for_screener.loc[selected_ticker].to_string() #IS THIS STILL NEEDED WHEN WE CHANGE AI PACKAGE?
 
 
-# #some calculations below can be adjusted:
-# def calculate_technical_indicators_manual(df):
+#some calculations below can be adjusted:
+def calculate_technical_indicators_manual(df):
      
-#     if 'Close' not in df.columns: #checking that we even have close prices
-#         print("DataFrame must contain a 'Close' column for technical analysis.")
-#         return df.copy() # if no close prices it just returnes a copy of the original dataframe
+    if 'Close' not in df.columns: #checking that we even have close prices
+        print("DataFrame must contain a 'Close' column for technical analysis.")
+        return df.copy() # if no close prices it just returnes a copy of the original dataframe
 
-#     # working on a new object, so not to change original dataframe
-#     df_copy = df.copy()
+    # working on a new object, so not to change original dataframe
+    df_copy = df.copy()
 
-#     # Calculating moving averages:
-#     df_copy['SMA_20'] = df_copy['Close'].rolling(window=20).mean() #sma - can change window if needed
-#     df_copy['SMA_50'] = df_copy['Close'].rolling(window=50).mean() #lma - ""
+    # Calculating moving averages:
+    df_copy['SMA_20'] = df_copy['Close'].rolling(window=20).mean() #sma - can change window if needed
+    df_copy['SMA_50'] = df_copy['Close'].rolling(window=50).mean() #lma - ""
 
-#     # Calculating Relative Strength Index (RSI) 
-#     window_length = 14
-#     delta = df_copy['Close'].diff() #difference between the current close and the previous close = daily price change
-#     gain = delta.where(delta > 0, 0) #This creates a Series where values are positive price changes (gains), and 0 otherwise.
-#     loss = -delta.where(delta < 0, 0) # This creates a Series where values are positive price losses (negative delta made positive), and 0 otherwise.
+    # Calculating Relative Strength Index (RSI) 
+    window_length = 14
+    delta = df_copy['Close'].diff() #difference between the current close and the previous close = daily price change
+    gain = delta.where(delta > 0, 0) #This creates a Series where values are positive price changes (gains), and 0 otherwise.
+    loss = -delta.where(delta < 0, 0) # This creates a Series where values are positive price losses (negative delta made positive), and 0 otherwise.
 
-#     avg_gain = gain.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the Exponential Weighted Moving Average (EWMA) of the gain values.
-#     avg_loss = loss.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the EWMA of the loss values
+    avg_gain = gain.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the Exponential Weighted Moving Average (EWMA) of the gain values.
+    avg_loss = loss.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the EWMA of the loss values
 
-#     rs = avg_gain / avg_loss #calculates the relative strength, which is the ratio of average gains to average losses - if avg loss=0, you will get Nan/Inf becuase of division by 0.
-#     df_copy['RSI'] = 100 - (100 / (1 + rs)) #RSI formula, assigned to new col 'RSI'
+    rs = avg_gain / avg_loss #calculates the relative strength, which is the ratio of average gains to average losses - if avg loss=0, you will get Nan/Inf becuase of division by 0.
+    df_copy['RSI'] = 100 - (100 / (1 + rs)) #RSI formula, assigned to new col 'RSI'
 
-#     # calculating Moving Average Convergence Divergence (MACD) 
-#     # MACD uses 12-period EMA, 26-period EMA, and 9-period signal line. ? found this online
-#     exp1 = df_copy['Close'].ewm(span=12, adjust=False).mean() #calculates the 12 period Exponential Moving Average (EMA) of close
-#     exp2 = df_copy['Close'].ewm(span=26, adjust=False).mean() #same but for 26 period
-#     df_copy['MACD'] = exp1 - exp2 #calculates the MACD line: 26ema- 12ema, and assigns to new col 'MACD'
-#     df_copy['MACD_Signal'] = df_copy['MACD'].ewm(span=9, adjust=False).mean() #signal line: 9-period EMA of the MACD line itself
-#     df_copy['MACD_Hist'] = df_copy['MACD'] - df_copy['MACD_Signal'] #dif between MACD and signal
+    # calculating Moving Average Convergence Divergence (MACD) 
+    # MACD uses 12-period EMA, 26-period EMA, and 9-period signal line. ? found this online
+    exp1 = df_copy['Close'].ewm(span=12, adjust=False).mean() #calculates the 12 period Exponential Moving Average (EMA) of close
+    exp2 = df_copy['Close'].ewm(span=26, adjust=False).mean() #same but for 26 period
+    df_copy['MACD'] = exp1 - exp2 #calculates the MACD line: 26ema- 12ema, and assigns to new col 'MACD'
+    df_copy['MACD_Signal'] = df_copy['MACD'].ewm(span=9, adjust=False).mean() #signal line: 9-period EMA of the MACD line itself
+    df_copy['MACD_Hist'] = df_copy['MACD'] - df_copy['MACD_Signal'] #dif between MACD and signal
 
-#     df_copy.dropna(inplace=True) #lots of NaN at beginning  of indicator calcs before suff data
+    df_copy.dropna(inplace=True) #lots of NaN at beginning  of indicator calcs before suff data
 
-#     return df_copy #new data frame with techn indicators (and no NaNs)
+    return df_copy #new data frame with techn indicators (and no NaNs)
     
-# selectedticker_hist_data = historical_prices_data[selected_ticker].copy() 
+selectedticker_hist_data = historical_prices_data[selected_ticker].copy() 
 
-#     # Using function above
-# se_hist_data_with_indicators = calculate_technical_indicators_manual(selectedticker_hist_data)
+    # Using function above
+se_hist_data_with_indicators = calculate_technical_indicators_manual(selectedticker_hist_data)
 
-#     # Print the tail (last few rows) to see the new indicator columns
-# print("{selected_ticker} Historical Data with Technical Indicators (last 5 rows):")#header (not data)
-# print(se_hist_data_with_indicators.tail())
+    # Print the tail (last few rows) to see the new indicator columns
+print("{selected_ticker} Historical Data with Technical Indicators (last 5 rows):")#header (not data)
+print(se_hist_data_with_indicators.tail())
 
-# def generate_technical_forecast_prompt(selected_ticker: str, df_with_indicators: pd.DataFrame) -> str: #taking stock ticker as a string, and dataframe (should include tech inds), will return string (for ai readbility)
+def generate_technical_forecast_prompt(selected_ticker: str, df_with_indicators: pd.DataFrame) -> str: #taking stock ticker as a string, and dataframe (should include tech inds), will return string (for ai readbility)
 
-#     recent_data = df_with_indicators.tail(10) #making short term forcast so using last 10 lines of df only
+    recent_data = df_with_indicators.tail(10) #making short term forcast so using last 10 lines of df only
 
-#     # Formatting for prompt
-#     data_str = recent_data[['Close', 'SMA_20', 'SMA_50', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']].to_string()
+    # Formatting for prompt
+    data_str = recent_data[['Close', 'SMA_20', 'SMA_50', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']].to_string()
 
-#     prompt = f"""
-# Analyze the following recent technical indicator data for {selected_ticker}: 
+    prompt = f"""
+Analyze the following recent technical indicator data for {selected_ticker}: 
 
-# {data_str}
+{data_str}
 
-# please use the data retrieved in calculate_technical_indicators_manual(selectedticker_hist_data)and help create a discounted cash flow analysis for the company in text format with a final stock price obtained by balancing the equity value with enterprise value and number of shares outstanding
-# express your output as a table with the same lines as in dcf please demonstrate the math being used to calculate the terminal value
-# Based on this data, provide a concise technical analysis forecast.
+please use the data retrieved in calculate_technical_indicators_manual(selectedticker_hist_data)and help create a discounted cash flow analysis for the company in text format with a final stock price obtained by balancing the equity value with enterprise value and number of shares outstanding
+express your output as a table with the same lines as in dcf please demonstrate the math being used to calculate the terminal value
+Based on this data, provide a concise technical analysis forecast.
 
-# Focus on:A
-# 1.  **Current Trend:** What do the SMAs suggest about the short-term and long-term trend?
-# 2.  **Momentum:** What does the RSI indicate (overbought/oversold, bullish/bearish divergence)? What about the MACD (crossovers, histogram)?
-# 3.  **Potential Price Action:** Based on these indicators, what is the most likely immediate future price movement (e.g., bullish, bearish, consolidating)?
-# 4.  **Key Levels:** Are there any implied support or resistance levels?
+Focus on:A
+1.  **Current Trend:** What do the SMAs suggest about the short-term and long-term trend?
+2.  **Momentum:** What does the RSI indicate (overbought/oversold, bullish/bearish divergence)? What about the MACD (crossovers, histogram)?
+3.  **Potential Price Action:** Based on these indicators, what is the most likely immediate future price movement (e.g., bullish, bearish, consolidating)?
+4.  **Key Levels:** Are there any implied support or resistance levels?
 
-# Be specific and use the indicator values to support your analysis.
-# """
-#     return prompt #PROMPT NEEDS TO BE ADJUSTED FOR OUR NEEDS THIS IS A SAMPLE
+Be specific and use the indicator values to support your analysis.
+"""
+    return prompt #PROMPT NEEDS TO BE ADJUSTED FOR OUR NEEDS THIS IS A SAMPLE
 
-# ai_tech_prompt = generate_technical_forecast_prompt(selected_ticker, se_hist_data_with_indicators)
+ai_tech_prompt = generate_technical_forecast_prompt(selected_ticker, se_hist_data_with_indicators)
 
-# print("\nAI prompt for Technical Analysis")
-# print(ai_tech_prompt)
-
-
+print("\nAI prompt for Technical Analysis")
+print(ai_tech_prompt)
 
 
-##
-##
-##              dcf code
-##
-##
-##
 
 
-# def generate_fundamental_dcf_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
-#     recent_data = df_with_fundamentals.tail(4)  # Use last 4 periods (e.g., quarters or years)
+#
+#
+#              dcf code
+#
+#
+#
 
-#     # Format relevant rows to string for visibility in the prompt
-#     data_cols = [
-#         'Total_Revenue', 'Net_Income_Common_Stockholders', 'Operating_Income', 'Gross_Profit',
-#         'Operating_Cash_Flow', 'Capital_Expenditure', 'Total_Assets',
-#         'Stockholders_Equity', 'Total_Debt', 'Current_Assets', 'Current_Liabilities'
-#     ]
-#     fundamental_str = recent_data[data_cols].to_string(index=False)
 
-#     # Prompt construction
-#     prompt = f"""
-# Perform a Discounted Cash Flow (DCF) analysis for {ticker} using the following recent fundamental financial data:
-
-# {fundamental_str}
-
-# Please:
-
-# 1. **Project Free Cash Flows (FCF)** for the next 5 years based on historical Operating Cash Flow minus Capital Expenditures.
-# 2. **Calculate the Terminal Value** using the Gordon Growth Model. Use an assumed long-term growth rate (e.g., 2.5%) and a discount rate (e.g., 8%). Show the formula and exact math.
-# 3. **Discount all cash flows (5-year FCF + Terminal Value)** to present value.
-# 4. **Compute Enterprise Value (EV)** and then adjust it to get Equity Value using:
-#    [
-#    text{{Equity Value}} = text{{Enterprise Value}} - text{{Net Debt}}
-#    ]
-#    where Net Debt = Total Debt - Cash (if available, assume 0 if not).
-# 5. **Determine the intrinsic stock price** using number of shares outstanding (assume a number or request if unknown).
-# 6. **Summarize the DCF in a table**, showing:
-#    - Year
-#    - Projected FCF
-#    - Present Value of FCF
-#    - Cumulative PV
-#    - Terminal Value
-#    - Enterprise Value
-#    - Equity Value
-#    - Implied Share Price
-
-# Then:
-
-# - Provide a concise fundamental analysis of the company's **profitability, efficiency, liquidity, and leverage** using ratios like:
-#   - Net Profit Margin
-#   - ROE and ROA
-#   - Current Ratio and Quick Ratio
-#   - Debt-to-Equity
-
-# Finally:
-
-# - Offer a valuation opinion: Is the stock **undervalued**, **overvalued**, or **fairly valued** relative to its calculated intrinsic value?
-
-# Use all available numeric data to justify your answer.
-# """
-
-#     return prompt
 
 
 def calculate_fundamental_indicators(financials):
@@ -263,7 +209,21 @@ def output_cleanup(reply) ->str:
     sample_df = pd.read_excel("/Users/kennethle/Downloads/NUS Summer Workshop/Project/DCF_Model_Sample.xlsx")
     sample_as_text = sample_df.to_csv(index=False)
     prompt = rf"""
-    Please reorganize {reply} to match with the format of {sample_as_text} but NOT the company
+    Please reorganize {reply} to match with the format of {sample_as_text} but NOT the company. Ensure it is not JSON
+    Ensure that the years are columns and the values are rows
+
+    Ensure that the columns will be formatted as separate cells
+
+    example:
+            year1  year2  year3  year4   year5
+    NOPAT
+    D&A
+    CapEX
+    change in Working Capital
+    FCF
+    terminal
+    share price
+
     """
     return prompt
 
@@ -506,7 +466,7 @@ reply = call_ollama(ai_dcf_prompt)
 cleaned = call_ollama(output_cleanup(reply))
 company_df = pd.read_fwf(StringIO(cleaned))
 print(type(company_df))  # This will tell you what it actually is
-company_df.to_excel('output.xlsx', index=False, engine='openpyxl')
+company_df.to_excel('output2.xlsx', index=False, engine='openpyxl')
 
 print(reply)
 
