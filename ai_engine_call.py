@@ -1,6 +1,8 @@
 import requests
 import pandas as pd
 import yfinance as yfin
+import re 
+from collections import Counter
 
 # Get S&P 500 company data
 url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -36,13 +38,15 @@ Output format requirements:
 - Show only the top 3 companies.
 - "Rationale" must use bullet points (use `.` for each point)
 - Max 3 bullet points per company. 
+- Every cell in a column must be exactly as wide as the longest entry in that column.
 - Each column must be fixed-width: pad shorter text with spaces so all rows align.
 - Do not wrap text. Use one line per row.
 - Every cell in a column must be exactly as wide as the longest entry in that column.
 - Align using pipes (`|`) and pad with spaces.
 - Example formatting (notice aligned columns):
 
-
+IMPORTANT: Do not change the table structure or add any additional text outside the table.
+IMPORTANT: Every cell in a column must be exactly as wide as the longest entry in that column.
 For each company, return:
 |----------------------------------------------------------|
 | Symbol | Company Name     | Rationale                    |
