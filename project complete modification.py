@@ -3,7 +3,7 @@ import yfinance as yf
 import numpy as np
 from io import StringIO
 import requests
-selected_ticker = 'NVDA' # <--- CHANGE THIS to the stock ticker you want to analyze 
+selected_ticker = 'AAPL' # <--- CHANGE THIS to the stock ticker you want to analyze 
 all_companies_data = {}
 print(f"Analyzing selected ticker: {selected_ticker}")
 historical_prices_data = {}
@@ -48,99 +48,6 @@ except Exception as e: #assigns any errors to variable e
     print(f"Could not fetch data for {selected_ticker}: {e}") #prints error for us
 
 sp500_df_for_screener = pd.DataFrame.from_dict(all_companies_data, orient='index') #converts dictionary to pandas data frame (from #1 company info)
-
-# print("\nQuick summary of data")
-# print(f"\n{selected_ticker} Data (first 5 rows):")
-# print(sp500_df_for_screener.head())
-
-# print(f"\nHistorical Prices for {selected_ticker} (first 5 rows):")
-# if selected_ticker in historical_prices_data:
-#     print(historical_prices_data[selected_ticker].head())
-
-# print(f"\nHistorical Prices for {selected_ticker} (first 5 rows):")
-# if selected_ticker in historical_prices_data:
-#     print(historical_prices_data[selected_ticker].head())
-example_stock_info = sp500_df_for_screener.loc[selected_ticker].to_string() #IS THIS STILL NEEDED WHEN WE CHANGE AI PACKAGE?
-
-
-#some calculations below can be adjusted:
-def calculate_technical_indicators_manual(df):
-     
-    if 'Close' not in df.columns: #checking that we even have close prices
-        print("DataFrame must contain a 'Close' column for technical analysis.")
-        return df.copy() # if no close prices it just returnes a copy of the original dataframe
-
-    # working on a new object, so not to change original dataframe
-    df_copy = df.copy()
-
-    # Calculating moving averages:
-    df_copy['SMA_20'] = df_copy['Close'].rolling(window=20).mean() #sma - can change window if needed
-    df_copy['SMA_50'] = df_copy['Close'].rolling(window=50).mean() #lma - ""
-
-    # Calculating Relative Strength Index (RSI) 
-    window_length = 14
-    delta = df_copy['Close'].diff() #difference between the current close and the previous close = daily price change
-    gain = delta.where(delta > 0, 0) #This creates a Series where values are positive price changes (gains), and 0 otherwise.
-    loss = -delta.where(delta < 0, 0) # This creates a Series where values are positive price losses (negative delta made positive), and 0 otherwise.
-
-    avg_gain = gain.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the Exponential Weighted Moving Average (EWMA) of the gain values.
-    avg_loss = loss.ewm(com=window_length - 1, min_periods=window_length).mean() #calculates the EWMA of the loss values
-
-    rs = avg_gain / avg_loss #calculates the relative strength, which is the ratio of average gains to average losses - if avg loss=0, you will get Nan/Inf becuase of division by 0.
-    df_copy['RSI'] = 100 - (100 / (1 + rs)) #RSI formula, assigned to new col 'RSI'
-
-    # calculating Moving Average Convergence Divergence (MACD) 
-    # MACD uses 12-period EMA, 26-period EMA, and 9-period signal line. ? found this online
-    exp1 = df_copy['Close'].ewm(span=12, adjust=False).mean() #calculates the 12 period Exponential Moving Average (EMA) of close
-    exp2 = df_copy['Close'].ewm(span=26, adjust=False).mean() #same but for 26 period
-    df_copy['MACD'] = exp1 - exp2 #calculates the MACD line: 26ema- 12ema, and assigns to new col 'MACD'
-    df_copy['MACD_Signal'] = df_copy['MACD'].ewm(span=9, adjust=False).mean() #signal line: 9-period EMA of the MACD line itself
-    df_copy['MACD_Hist'] = df_copy['MACD'] - df_copy['MACD_Signal'] #dif between MACD and signal
-
-    df_copy.dropna(inplace=True) #lots of NaN at beginning  of indicator calcs before suff data
-
-    return df_copy #new data frame with techn indicators (and no NaNs)
-    
-selectedticker_hist_data = historical_prices_data[selected_ticker].copy() 
-
-    # Using function above
-se_hist_data_with_indicators = calculate_technical_indicators_manual(selectedticker_hist_data)
-
-    # Print the tail (last few rows) to see the new indicator columns
-print("{selected_ticker} Historical Data with Technical Indicators (last 5 rows):")#header (not data)
-print(se_hist_data_with_indicators.tail())
-
-def generate_technical_forecast_prompt(selected_ticker: str, df_with_indicators: pd.DataFrame) -> str: #taking stock ticker as a string, and dataframe (should include tech inds), will return string (for ai readbility)
-
-    recent_data = df_with_indicators.tail(10) #making short term forcast so using last 10 lines of df only
-
-    # Formatting for prompt
-    data_str = recent_data[['Close', 'SMA_20', 'SMA_50', 'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist']].to_string()
-
-    prompt = f"""
-Analyze the following recent technical indicator data for {selected_ticker}: 
-
-{data_str}
-
-please use the data retrieved in calculate_technical_indicators_manual(selectedticker_hist_data)and help create a discounted cash flow analysis for the company in text format with a final stock price obtained by balancing the equity value with enterprise value and number of shares outstanding
-express your output as a table with the same lines as in dcf please demonstrate the math being used to calculate the terminal value
-Based on this data, provide a concise technical analysis forecast.
-
-Focus on:
-1.  **Current Trend:** What do the SMAs suggest about the short-term and long-term trend?
-2.  **Momentum:** What does the RSI indicate (overbought/oversold, bullish/bearish divergence)? What about the MACD (crossovers, histogram)?
-3.  **Potential Price Action:** Based on these indicators, what is the most likely immediate future price movement (e.g., bullish, bearish, consolidating)?
-4.  **Key Levels:** Are there any implied support or resistance levels?
-
-Be specific and use the indicator values to support your analysis.
-"""
-    return prompt #PROMPT NEEDS TO BE ADJUSTED FOR OUR NEEDS THIS IS A SAMPLE
-
-ai_tech_prompt = generate_technical_forecast_prompt(selected_ticker, se_hist_data_with_indicators)
-
-print("\nAI prompt for Technical Analysis")
-# print(ai_tech_prompt)
-
 
 
 
@@ -289,91 +196,111 @@ def call_ollama(prompt, model='gemma3'):
 ###                                                                              ###
 ####################################################################################
 
-def tax_rate_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
 
-    data_cols_tax_rate = [
-    'Tax_Provision',
-    'Pretax_Income',]
-    
-    tax_rate_data = recent_data[data_cols_tax_rate].to_string(index=False)
-
-    prompt = rf"""
-    Using the financial data below for {ticker}, calculate the **effective tax rate** for only the most recent period in this case 2025. 
-
-    ### Formula:
-    \[
-    \text{{Effective Tax Rate}} = \frac{{\text{{Tax Provision}}}}{{\text{{Pre-Tax Income}}}}
-    \]
-
-    ### Notes:
-    - Use the `Tax_Provision` and `Pretax_Income` values provided.
-    - If any value of `Pretax_Income` is zero or negative, explain how you handle the division (e.g., skip, set tax rate to zero, or mark as undefined).
-    - Report the effective tax rate as a percentage .
-
-    ### Financial Data:
-    {tax_rate_data}
-
+def tax_rate_calc(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
     """
+    Calculate the most recent effective tax rate from financial data.
 
+    Args:
+        ticker (str): The stock ticker (for labeling or future use).
+        df_with_fundamentals (pd.DataFrame): A DataFrame containing at least 'Tax_Provision' and 'Pretax_Income'.
 
-    return prompt
-
-def tax_rate_exact(reply) ->str:
-    
-    prompt = rf"""
-    extract only the final tax rate from {reply} expressed **in decimal form NOT percentage form**, **ensure no extraneous spaces**  double check for fromatting
+    Returns:
+        str: Formatted effective tax rate (or 'N/A' if not computable).
     """
+    # Use the last 2 rows (e.g., most recent quarters or years)
+    recent_data = df_with_fundamentals.tail(4)
 
-    return prompt
+    # Columns needed
+    data_cols_tax_rate = ['Tax_Provision', 'Pretax_Income']
 
-print("Calculating effective tax rate:")
-tax_rate_extract = call_ollama(tax_rate_calc(selected_ticker,fundamental_data))
-print("Tax Rate: ")
-print(call_ollama(tax_rate_exact(tax_rate_extract)))
+    # Extract the most recent values (last row)
+    most_recent = recent_data[data_cols_tax_rate].iloc[0]
 
-tax_rate = float(call_ollama(tax_rate_exact(tax_rate_extract)))
+    most_recent_tax_provision = most_recent['Tax_Provision']
+    most_recent_pretax_income = most_recent['Pretax_Income']
+
+    # Avoid division by zero
+    if most_recent_pretax_income != 0:
+        effective_tax_rate = most_recent_tax_provision / most_recent_pretax_income
+        return effective_tax_rate
+    else:
+        return 0.2
+
+print("Tax Rate:")
+tax_rate = tax_rate_calc(selected_ticker,fundamental_data)
+print(tax_rate)
 
 ####################################################################################
 ###                                                                              ###
 ###                                                                              ###
-###                            Net Debt Calculation                            ###
+###                              Net Debt Calculation                            ###
 ###                                                                              ###
 ###                                                                              ###
 ####################################################################################
 
-def net_debt_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
-
-    data_cols_net_debt = [
-    'Net_Debt']
-    
-    net_data = recent_data[data_cols_net_debt].to_string(index=False)
-
-    prompt = rf"""
-    You are a financial analyst. Your task is to identify the current net_debt {ticker} using the recent data provided below.
-
-    Use the following financial information for your analysis:
-    {net_data}
-
-    Please proceed with the following steps:
-
-    1. Identify the most recent value for net debt
-    2. **Output the final Net Debt** value as a complete number in standard notation with no explanation
-
-    output the final number as an integer
-    **double check to ensure it is only an integer**
+def net_debt_calc(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
     """
+    Calculate the most recent effective tax rate from financial data.
 
-    return prompt
+    Args:
+        ticker (str): The stock ticker (for labeling or future use).
+        df_with_fundamentals (pd.DataFrame): A DataFrame containing at least 'Tax_Provision' and 'Pretax_Income'.
+
+    Returns:
+        str: Formatted effective tax rate (or 'N/A' if not computable).
+    """
+    # Use the last 2 rows (e.g., most recent quarters or years)
+    recent_data = df_with_fundamentals.tail(4)
+
+    # Columns needed
+    data_cols_net_debt = ['Net_Debt']
+
+    # Extract the most recent values (last row)
+    most_recent_nd = recent_data[data_cols_net_debt].iloc[0]
+
+    most_recent_net_debt = most_recent_nd['Net_Debt']
+
+    return most_recent_net_debt
 
 
-print("Locating Net Debt:")
-net_debt_extract = call_ollama(net_debt_calc(selected_ticker,fundamental_data))
-print("Net Debt: ")
-print(net_debt_extract)
+print("Net Debt:")
+net_debt = net_debt_calc(selected_ticker,fundamental_data)
+print(net_debt)
 
-net_debt = float(net_debt_extract)
+
+# def net_debt_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
+#     recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
+
+#     data_cols_net_debt = [
+#     'Net_Debt']
+    
+#     net_data = recent_data[data_cols_net_debt].to_string(index=False)
+
+#     prompt = rf"""
+#     You are a financial analyst. Your task is to identify the current net_debt {ticker} using the recent data provided below.
+
+#     Use the following financial information for your analysis:
+#     {net_data}
+
+#     Please proceed with the following steps:
+
+#     1. Identify the most recent value for net debt
+#     2. **Output the final Net Debt** value as a complete number in standard notation with NO OTHER EXPLANATION OR WORDS, NUMBER ONLY
+
+#     output the final number as an integer
+#     **double check to ensure it is only an integer**
+#     """
+
+#     return prompt
+
+
+# print("Locating Net Debt:")
+# net_debt_extract = call_ollama(net_debt_calc(selected_ticker,fundamental_data))
+# print("Net Debt: ")
+# print(net_debt_extract)
+
+# net_debt = float(net_debt_extract)
 
 ####################################################################################
 ###                                                                              ###
@@ -384,7 +311,7 @@ net_debt = float(net_debt_extract)
 ####################################################################################
 
 def wacc_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
+    recent_data = df_with_fundamentals.tail(3)  # Use last 4 periods (e.g., quarters or years)
 
     data_cols_wacc = [
     # Shares Outstanding
@@ -494,7 +421,7 @@ def wacc_exact(reply) ->str:
     return prompt
 print("Calculating WACC:")
 wacc_calculation = call_ollama(wacc_calc(selected_ticker,fundamental_data))
-print(wacc_calculation)
+# print(wacc_calculation)
 print("Wacc: ")
 print(call_ollama(wacc_exact(wacc_calculation)))
 
@@ -507,7 +434,7 @@ print(call_ollama(wacc_exact(wacc_calculation)))
 ####################################################################################
 
 def capex_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
+    recent_data = df_with_fundamentals.tail(3)  # Use last 4 periods (e.g., quarters or years)
 
     data_cols_capex = [
     'Capital_Expenditure']
@@ -522,7 +449,7 @@ def capex_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
 
     Please proceed with the following steps:
 
-    1. Identify the most recent value for capex
+    1. Identify the most recent value for capex 
     2. **Output the final Capex** value as a complete number in standard notation with no explanation
 
     output the final number as an integer
@@ -549,7 +476,7 @@ capex = float(capex_extract)
 ####################################################################################
 
 def da_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
+    recent_data = df_with_fundamentals.tail(3)  # Use last 4 periods (e.g., quarters or years)
 
     data_cols_da = [
     'Depreciation_And_Amortization']
@@ -590,7 +517,7 @@ d_a = float(da_extract)
 ####################################################################################
 
 def ebit_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
+    recent_data = df_with_fundamentals.tail(4)  # Use last 4 periods (e.g., quarters or years)
 
     data_cols_ebit = [
     'EBIT',
@@ -609,7 +536,7 @@ def ebit_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
 
     Please proceed with the following steps:
 
-    1. Identify the most recent value for EBIT
+    1. Identify the most recent value for EBIT (generally the last value)
     2. **Output the final EBIT** value as a complete number in standard notation with no explanation
 
     output the final number as an integer
@@ -635,7 +562,7 @@ ebit_0 = float(ebit_extract)
 ####################################################################################
 
 def wc_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
-    recent_data = df_with_fundamentals.tail(2)  # Use last 4 periods (e.g., quarters or years)
+    recent_data = df_with_fundamentals.tail(3)  # Use last 4 periods (e.g., quarters or years)
 
     data_cols_wc = [
         'Change_In_Working_Capital',
@@ -647,16 +574,11 @@ def wc_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
         'Inventory',
         'Accounts_Receivable',
         'Other_Current_Assets',
-        'Prepaid_Assets',
         
         # Current Liabilities
         'Current_Liabilities',
         'Current_Debt',
-        'Payables',
-        'Accounts_Payable',
-        'Current_Accrued_Expenses',
-        'Other_Current_Borrowings',
-        'Payables_And_Accrued_Expenses'
+
     ]
     
     wc_data = recent_data[data_cols_wc].to_string(index=False)
@@ -681,16 +603,11 @@ def wc_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
     - `Inventory`
     - `Accounts_Receivable`
     - `Other_Current_Assets`
-    - `Prepaid_Assets`
 
     **Current Liabilities-related fields:**
     - `Current_Liabilities`
     - `Current_Debt`
-    - `Payables`
-    - `Accounts_Payable`
-    - `Current_Accrued_Expenses`
-    - `Other_Current_Borrowings`
-    - `Payables_And_Accrued_Expenses`
+
 
     **Additional Notes:**
     - Exclude **cash and equivalents** from current assets.
@@ -760,7 +677,7 @@ discounted_fcf = discount(fcf_values, wacc)
 cumulative_pv = np.cumsum(discounted_fcf)
 
 # Terminal Value (using Gordon Growth Model)
-terminal_value = fcf_values[-1] * (1 + 0.025) / (wacc - 0.025)
+terminal_value = fcf_values[-1] * (1 + growth_rate) / (wacc - growth_rate)
 discounted_terminal = terminal_value / (1 + wacc) ** len(years)
 
 enterprise_value = cumulative_pv[-1] + discounted_terminal
@@ -794,8 +711,8 @@ df.rename(columns={'index': 'Metric'}, inplace=True)
 
 # Add final rows separately
 summary_df = pd.DataFrame({
-    "Metric": ["Terminal Value (PV)", "Enterprise Value", "Equity Value", "Implied Share Price"],
-    "Value": [terminal_value, enterprise_value, equity_value, implied_price]
+    "Metric": ["WACC","Terminal Value (PV)", "Enterprise Value", "Equity Value", "Implied Share Price"],
+    "Value": [wacc,terminal_value, enterprise_value, equity_value, implied_price]
 })
 
 # Display results
