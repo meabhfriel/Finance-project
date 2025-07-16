@@ -7,6 +7,7 @@ import yfinance as yf
 import re #used for pattern matching when extracting tickers
 from collections import Counter
 from fastapi.responses import JSONResponse
+financial_statements_data = {}
 
 app = FastAPI()
 
@@ -59,7 +60,7 @@ Please provide a concise technical analysis forecast including trend, momentum, 
 
 ### 4. 通用 LLM 请求方法 ###
 
-def call_ollama(prompt, model, repeat=5):
+def call_ollama(prompt, model, repeat):
     results = []
     for _ in range(repeat):
         res = requests.post(
@@ -67,7 +68,7 @@ def call_ollama(prompt, model, repeat=5):
             json={'model': model, 'prompt': prompt, 'stream': False}
         )
         results.append(res.json()['response']) #converting HTTP body back to a python dict.
-    return results
+    return results[0] if repeat == 1 else results
 
 ###1.Module 1###
 # Get Tech Sector Companies from S&P 500
@@ -224,53 +225,600 @@ def discount(cash_flows, discount_rate, periods=None):
 
 ### 5. POST 接口：用户偏好选股分析 ###
 
+
+
+
 @app.post("/calculate_dcf")
 async def calculate_dcf(request: Request):
     data = await request.json()
-    ticker = data.get("ticker", "AAPL")
-    stock = yf.Ticker(ticker)
+    selected_ticker = data.get("ticker", "AAPL")
+    stock = yf.Ticker(selected_ticker)
+    financial_statements_data[selected_ticker] = {
+        'Income Statement': stock.financials.T, #stock.financials retrieves the annual income statements for the ticker as a Pandas DataFrame. 
+        'Balance Sheet': stock.balance_sheet.T, #stock.balance_sheet retrieves the annual balamce sheets
+        'Cash Flow': stock.cashflow.T #stock.cashflow retrieves annual cashflow statements
+    } #.T to transpose so that  dates are in rows and financial data in columns (to help make data easier to work with), and then we store these 3 financial statemen's info in financial_statements_data[ticker]
+
+    
     
     try:
-        income = stock.financials.T
-        balance = stock.balance_sheet.T
-        cashflow = stock.cashflow.T
+        def calculate_fundamental_indicators(financials):
+            financials_raw = financial_statements_data[selected_ticker]
+            # Extract individual statements
+            income_df = financials.get('income_statement', pd.DataFrame()).copy()
+            balance_df = financials.get('balance_sheet', pd.DataFrame()).copy()
+            cashflow_df = financials.get('cash_flow', pd.DataFrame()).copy()
 
-        financials = {
-            'income_statement': income,
-            'balance_sheet': balance,
-            'cash_flow': cashflow
-        }
+            # Move index to column for merging
+            for df in [income_df, balance_df, cashflow_df]:
+                df['Date'] = df.index
+                df.reset_index(drop=True, inplace=True)
 
-        fundamentals = calculate_fundamentals(financials)
-        fundamentals = fundamentals.tail(4)
+            # Merge on 'Date' across statements
+            df = income_df.merge(balance_df, on='Date', how='outer').merge(cashflow_df, on='Date', how='outer')
 
-        ebit = fundamentals['EBIT'].iloc[-1]
-        d_a = fundamentals['Depreciation_And_Amortization'].iloc[-1]
-        capex = fundamentals['Capital_Expenditure'].iloc[-1]
-        wc = fundamentals['Change_In_Working_Capital'].iloc[-1]
-        tax_rate = fundamentals['Tax_Provision'].iloc[-1] / fundamentals['Pretax_Income'].iloc[-1]
-        net_debt = fundamentals['Net_Debt'].iloc[-1]
+            # Avoid divide-by-zero errors
+            df.replace({0: np.nan}, inplace=True)
 
-        info = stock.info
-        shares_outstanding = info.get('sharesOutstanding', 1)
-        wacc = 0.085
-        growth_rate = 0.025
+            # Normalize column names (snake_case for consistent access)
+            df.columns = df.columns.str.strip().str.replace(" ", "_").str.replace(r"[^\w_]", "", regex=True)
 
+            return df
+        
+        if selected_ticker in financial_statements_data:
+            # Extract the raw financials for MCD
+            financials_raw = financial_statements_data[selected_ticker]
+
+            # Copy and fix the structure so the index becomes a 'Date' column
+            income_df = financials_raw['Income Statement'].copy()
+            balance_df = financials_raw['Balance Sheet'].copy()
+            cashflow_df = financials_raw['Cash Flow'].copy()
+
+            for df in [income_df, balance_df, cashflow_df]:
+                df['Date'] = df.index
+                df.reset_index(drop=True, inplace=True)
+
+            # Reassemble the corrected input structure using lowercase keys
+            financials_fixed = {
+                'income_statement': income_df,
+                'balance_sheet': balance_df,
+                'cash_flow': cashflow_df
+            }
+            # print("First row of Income Statement:")
+            # print(income_df.head(1).T)  # Transpose to view vertical
+
+        #     # Now safely pass into the calculation function
+
+
+            fundamental_data = calculate_fundamental_indicators(financials_fixed)
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                            Tax Rate Calculation                              ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+
+        def tax_rate_calc(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+            """
+            Calculate the most recent effective tax rate from financial data.
+
+            Args:
+                ticker (str): The stock ticker (for labeling or future use).
+                df_with_fundamentals (pd.DataFrame): A DataFrame containing at least 'Tax_Provision' and 'Pretax_Income'.
+
+            Returns:
+                str: Formatted effective tax rate (or 'N/A' if not computable).
+            """
+            # Use the last 2 rows (e.g., most recent quarters or years)
+            recent_data = df_with_fundamentals.tail(4)
+
+            # Columns needed
+            data_cols_tax_rate = ['Tax_Provision', 'Pretax_Income']
+            
+
+            # Extract the most recent values (last row)
+            most_recent = recent_data[data_cols_tax_rate].iloc[0]
+            most_recent_tax_provision = most_recent['Tax_Provision']
+            most_recent_pretax_income = most_recent['Pretax_Income']
+
+            # Avoid division by zero
+            if most_recent_pretax_income != 0:
+                effective_tax_rate = most_recent_tax_provision / most_recent_pretax_income
+                return effective_tax_rate
+            else:
+                return 0.2
+
+        print("Tax Rate:")
+        tax_rate = tax_rate_calc(selected_ticker,fundamental_data)
+        print(tax_rate)
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                              Net Debt Calculation                            ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        def net_debt_calc(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+            """
+            Calculate the most recent effective tax rate from financial data.
+
+            Args:
+                ticker (str): The stock ticker (for labeling or future use).
+                df_with_fundamentals (pd.DataFrame): A DataFrame containing at least 'Tax_Provision' and 'Pretax_Income'.
+
+            Returns:
+                str: Formatted effective tax rate (or 'N/A' if not computable).
+            """
+            # Use the last 2 rows (e.g., most recent quarters or years)
+            recent_data = df_with_fundamentals.tail(4)
+
+            # Columns needed
+            data_cols_net_debt = ['Net_Debt']
+
+            # Extract the most recent values (last row)
+            most_recent_nd = recent_data[data_cols_net_debt].iloc[0]
+
+            most_recent_net_debt = most_recent_nd['Net_Debt']
+
+            return most_recent_net_debt
+
+
+        print("Net Debt:")
+        net_debt = net_debt_calc(selected_ticker,fundamental_data)
+        print(net_debt)
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                                 WACC Calculation                             ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        def wacc_calc(ticker: str, df_with_fundamentals: pd.DataFrame) ->str:
+            recent_data = df_with_fundamentals.tail(3)  # Use last 4 periods (e.g., quarters or years)
+
+            data_cols_wacc = [
+            # Shares Outstanding
+            'Ordinary_Shares_Number',
+            'Share_Issued',
+            'Diluted_Average_Shares',
+            'Basic_Average_Shares',
+
+            # Debt - Short-Term and Long-Term
+            'Current_Debt',
+            'Other_Current_Borrowings',
+            'Current_Debt_And_Capital_Lease_Obligation',
+            'Long_Term_Debt',
+            'Long_Term_Debt_And_Capital_Lease_Obligation',
+            'Total_Debt',
+
+            # Interest Expense (for estimating average debt rate)
+            'Interest_Expense',
+
+            # Tax data (for effective tax rate)
+            # 'Tax_Provision',
+            # 'Pretax_Income',
+            # 'Interest_Paid_Supplemental_Data'
+            ]
+
+            stock = yf.Ticker(ticker)
+            info = stock.info  # Contains metadata and financial metrics
+            
+            wacc_data_2 = {
+                'current_stock_price': info.get('currentPrice'),
+                'shares_outstanding': info.get('sharesOutstanding'),
+                'beta': info.get('beta'),
+                'market_cap': info.get('marketCap'),
+                'pe_ratio': info.get('trailingPE'),
+                'eps': info.get('trailingEps'),
+                'dividend_yield': info.get('dividendYield'),
+                'sector': info.get('sector'),
+                'long_name': info.get('longName'),
+                'exchange': info.get('exchange'),
+            }
+
+            
+            wacc_data_1 = recent_data[data_cols_wacc].to_string(index=False)
+
+            prompt = rf"""
+            You are a financial analyst. Your task is to calculate the Weighted Average Cost of Capital (WACC) for {ticker} using the recent data provided below.
+
+            Use the following financial information for your analysis:
+            {wacc_data_1}
+            {wacc_data_2}
+            {tax_rate}
+
+            Please proceed with the following steps:
+
+            1. **Cost of Equity (Re)**:
+            Use the **Capital Asset Pricing Model (CAPM)**:
+            \[
+            R_e = R_f + \beta \times (R_m - R_f)
+            \]
+            - Use the provided **beta** value.
+            - Assume a **market risk premium (R_m - R_f)** of 5.5%.
+            - Use a **risk-free rate (R_f)** of 4.2% (based on current 10-Year U.S. Treasury yield).
+
+            2. **Cost of Debt (Rd)**:
+            Estimate the average interest rate on debt using:
+            \[
+            R_d = \frac{{\text{{Interest_Expense}}}}{{\text{{Average Total Debt}}}}
+            \]
+            - Use the most recent values for **Interest_Expense** and **Total_Debt** (or the best proxy).
+            - If **Interest_Paid_Supplemental_Data** is available, include it in your estimate.
+            - Assume tax shield: After-tax cost of debt = \( R_d \times (1 - \text{{Effective Tax Rate}}) \)
+            - Effective Tax Rate = {tax_rate}
+
+            3. **Capital Structure**:
+            - Estimate the weights of debt and equity:
+                \[
+                W_e = \frac{{\text{{Market Cap}}}}{{\text{{Market Cap}} + \text{{Total Debt}}}}, \quad
+                W_d = \frac{{\text{{Total Debt}}}}{{\text{{Market Cap}} + \text{{Total Debt}}}}
+                \]
+            - Use **Market Cap** from yfinance data and **Total_Debt** from financials.
+
+            4. **WACC Calculation**:
+            \[
+            WACC = W_e \times R_e + W_d \times R_d \times (1 - {tax_rate})
+            \]
+
+            5. **Output the final WACC** value as a percentage rounded to two decimals. Show all steps, intermediate results, and final formula used. 
+
+            If WACC is below 5%, default to 10%
+
+            If any required value is missing, explain how you'd handle it or what you'd assume.
+            """
+
+            return prompt
+
+        def wacc_exact(reply) ->str:
+            
+            prompt = rf"""
+            extract only the final wacc number from {reply} expressed **in decimal form NOT percentage form**, **ensure no extraneous spaces or other words**  double check for fromatting
+
+            should be in the same format as:
+
+            0.00
+            0.1
+            0.2
+            1.10
+            """
+
+            return prompt
+        print("Calculating WACC:")
+        wacc_calculation = call_ollama(wacc_calc(selected_ticker,fundamental_data),"gemma3",1)
+        # print(wacc_calculation)
+        print("Wacc: ")
+        print(call_ollama(wacc_exact(wacc_calculation),"gemma3",1))
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                                CapEx Calculation                             ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        def capex_forecast_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+            recent_data = df_with_fundamentals.tail(6)  # use more periods if available
+
+            data_cols_capex = ['Capital_Expenditure']
+            capex_data = recent_data[data_cols_capex].to_string(index=False)
+
+            prompt = rf"""
+            You are a financial analyst tasked with forecasting **Capital Expenditures (CapEx)** for {ticker} over the next 5 years.
+
+            You are provided with historical values for:
+            - Capital_Expenditure
+
+            Here is the historical CapEx data:
+            {capex_data}
+
+            Please follow these instructions:
+
+            1. Analyze the historical CapEx trend.
+            2. Make a reasonable assumption about CapEx growth or stability. If erratic, consider smoothing or using a moving average.
+            3. Forecast CapEx for the next 5 years using your assumption.
+            4. Output the projected CapEx values **as a list of 5 numbers**, in plain decimal format, without dollar signs or commas and as full numbers NOT in scientific notation.
+
+            **Format your output like this:**
+            CapEx Growth Assumption: ±X% or constant
+            Forecast: [value1, value2, value3, value4, value5]
+            """
+
+            return prompt.strip()
+
+        print("Generating CapEx forecast:")
+        capex_forecast_output = call_ollama(capex_forecast_prompt(selected_ticker, fundamental_data),"gemma3",1)
+        print("AI Response:\n", capex_forecast_output)
+
+        import re
+
+        match = re.search(r"Forecast:\s*\[(.*?)\]", capex_forecast_output)
+        if match:
+            capex = [float(x.strip()) for x in match.group(1).split(',')]
+            print("match found")
+        else:
+            raise ValueError("Could not parse CapEx forecast from AI response")
+
+        # Optional: Extract CapEx growth assumption
+        growth_match = re.search(r"CapEx Growth Assumption:\s*([+-]?\d+\.?\d*)%", capex_forecast_output)
+        if growth_match:
+            capex_growth_rate = float(growth_match.group(1)) / 100
+        else:
+            capex_growth_rate = None
+
+        print("done with capex")
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                                 D&A Calculation                              ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        def da_forecast_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+            recent_data = df_with_fundamentals.tail(6)  # Use more data if available
+
+            data_cols_da = [
+                'Depreciation_And_Amortization'
+            ]
+
+            da_data = recent_data[data_cols_da].to_string(index=False)
+
+            prompt = rf"""
+            You are a financial analyst tasked with forecasting **Depreciation & Amortization (D&A)** for {ticker} over the next 5 years.
+
+            You are provided with historical data, including:
+            - Depreciation_And_Amortization
+
+
+            Here is the historical D&A data:
+            {da_data}
+
+            Please follow these steps:
+
+            1. Analyze the historical trend of D&A.
+            2. Make a realistic assumption about how D&A will evolve over the next 5 years (constant, increasing, or decreasing).
+            3. Forecast D&A for each of the next 5 years using your assumption.
+            4. Output only the projected D&A values **as a list of 5 numbers**, in plain decimal format, and without symbols or commas and as full numbers NOT in scientific notation.
+
+            **Format your answer like this:**
+            D&A Growth Assumption: ±X% or constant
+            Forecast: [value1, value2, value3, value4, value5]
+            """
+
+            return prompt.strip()
+
+        print("Generating D&A forecast:")
+        da_forecast_output = call_ollama(da_forecast_prompt(selected_ticker, fundamental_data),"gemma3",1)
+        print("AI Response:\n", da_forecast_output)
+
+        match = re.search(r"Forecast:\s*\[(.*?)\]", da_forecast_output)
+        if match:
+            d_a = [float(x.strip()) for x in match.group(1).split(',')]
+        else:
+            raise ValueError("Could not parse D&A forecast from AI response")
+
+        # Optional: Extract D&A growth assumption
+        growth_match = re.search(r"D&A Growth Assumption:\s*([+-]?\d+\.?\d*)%", da_forecast_output)
+        if growth_match:
+            da_growth_rate = float(growth_match.group(1)) / 100
+        else:
+            da_growth_rate = None
+
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                                EBIT Calculation                              ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        def ebit_forecast_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+            recent_data = df_with_fundamentals.tail(8)  # Use more periods if available
+
+            data_cols_ebit = ['EBIT', 'Operating_Income']
+            ebit_data = recent_data[data_cols_ebit].to_string(index=False)
+
+            prompt = rf"""
+            You are a financial analyst tasked with forecasting EBIT for the company {ticker}.
+
+            You are provided with recent historical financial data for EBIT and Operating Income. 
+            If EBIT is missing, you may use Operating_Income as a proxy.
+
+            Here is the historical data:
+            {ebit_data}
+
+            Please perform the following:
+
+            1. Analyze the EBIT trend (use Operating_Income only if EBIT is not available).
+            2. Make a reasonable assumption about the **annual EBIT growth rate** (explicitly state your assumption in %).
+            3. Forecast EBIT for the next 5 years using that growth rate.
+            4. Output the projected EBIT values **as a list of 5 integers**, one per year, in standard notation (no symbols or commas) and as full numbers NOT in scientific notation.
+
+            **Format your response exactly as follows:**
+            EBIT Growth Rate: X%
+            Forecast: [value1, value2, value3, value4, value5]
+            """
+
+            return prompt.strip()
+
+        print("Generating EBIT forecast:")
+        ebit_forecast_output = call_ollama(ebit_forecast_prompt(selected_ticker, fundamental_data),"gemma3",1)
+        print("AI Response:\n", ebit_forecast_output)
+
+        import re
+
+        match = re.search(r"Forecast:\s*\[(.*?)\]", ebit_forecast_output)
+        if match:
+            ebit_0 = [float(x.strip()) for x in match.group(1).split(',')]
+        else:
+            raise ValueError("Could not parse forecast from AI response")
+
+        # Optional: get growth rate too
+        growth_match = re.search(r"EBIT Growth Rate:\s*([\d.]+)%", ebit_forecast_output)
+        if growth_match:
+            ebit_growth_rate = float(growth_match.group(1)) / 100
+        else:
+            ebit_growth_rate = None
+
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                                 WC Calculation                               ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        def wc_forecast_prompt(ticker: str, df_with_fundamentals: pd.DataFrame) -> str:
+            recent_data = df_with_fundamentals.tail(6)  # use more history if available
+
+            data_cols_wc = [
+                'Change_In_Working_Capital',
+                'Current_Assets',
+                'Current_Liabilities'
+            ]
+
+            wc_data = recent_data[data_cols_wc].to_string(index=False)
+
+            prompt = rf"""
+            You are a financial analyst tasked with forecasting the **Change in Net Working Capital (ΔNWC)** for {ticker} over the next 5 years.
+
+            You are provided with historical data including:
+            - Change_In_Working_Capital (if available)
+            - Current assets and liabilities and their components
+
+            Here is the historical data:
+            {wc_data}
+
+            Please follow these instructions:
+            1. Compute ΔNWC over the last 2-3 periods using this formula:
+            ΔNWC = (Current Assets - Cash) - (Current Liabilities - Short-Term Debt)
+            2. Analyze the trend and assume a **realistic growth rate or stabilization trend** for ΔNWC.
+            3. Forecast the ΔNWC for the next 5 years using your assumption.
+            4. Output the projected ΔNWC values **as a list of 5 numbers**, in plain decimal format and as full numbers NOT in scientific notation.
+
+            **Format your answer like this:**
+            ΔNWC Growth Assumption: ±X% or constant
+            Forecast: [value1, value2, value3, value4, value5]
+            """
+
+            return prompt.strip()
+
+        print("Generating ΔNWC forecast:")
+        wc_forecast_output = call_ollama(wc_forecast_prompt(selected_ticker, fundamental_data),"gemma3",1)
+        print("AI Response:\n", wc_forecast_output)
+
+        import re
+
+        match = re.search(r"Forecast:\s*\[(.*?)\]", wc_forecast_output)
+        if match:
+            wc_change = [float(x.strip()) for x in match.group(1).split(',')]
+        else:
+            raise ValueError("Could not parse ΔNWC forecast from AI response")
+
+        # Optional: get growth assumption
+        growth_match = re.search(r"ΔNWC Growth Assumption:\s*([+-]?\d+\.?\d*)%", wc_forecast_output)
+        if growth_match:
+            wc_growth_rate = float(growth_match.group(1)) / 100
+        else:
+            wc_growth_rate = None
+
+
+        ####################################################################################
+        ###                                                                              ###
+        ###                                                                              ###
+        ###                                DCF Calculation                               ###
+        ###                                                                              ###
+        ###                                                                              ###
+        ####################################################################################
+
+        wacc = float(call_ollama(wacc_exact(wacc_calculation),"gemma3",1))
+        stock = yf.Ticker(selected_ticker)
+        info = stock.info  # Contains metadata and financial metrics
+
+        e_0 = info.get('sharesOutstanding')  # Shares outstanding
+        growth_rate = 0.025  # 2.5%
+        # years = ["year" "1", "2","3", "4", "5", "6"]
+
+        # Discount function
+        def discount(cash_flows, discount_rate, periods=None):
+            cash_flows = np.array(cash_flows, dtype=float)
+            if periods is None:
+                periods = np.arange(1, len(cash_flows) + 1)
+            else:
+                periods = np.array(periods)
+            return cash_flows / (1 + discount_rate) ** periods
+
+        # 1. Calculate FCFs
         years = list(range(2025, 2030))
-        base_fcf = ebit * (1 - tax_rate) + d_a - capex - wc
-        fcf_values = [base_fcf * (1 + growth_rate) ** i for i in range(len(years))]
 
+
+        # Calculate FCF values (same across all years in this example)
+        fcf_values = [
+            ebit * (1 - tax_rate) - cap - wc + da
+            for ebit, cap, wc, da in zip(ebit_0, capex, wc_change, d_a)
+        ]
+
+        # Discounted FCF
         discounted_fcf = discount(fcf_values, wacc)
+
+        # Cumulative PV
         cumulative_pv = np.cumsum(discounted_fcf)
 
+        # Terminal Value (using Gordon Growth Model)
         terminal_value = fcf_values[-1] * (1 + growth_rate) / (wacc - growth_rate)
         discounted_terminal = terminal_value / (1 + wacc) ** len(years)
+
         enterprise_value = cumulative_pv[-1] + discounted_terminal
         equity_value = enterprise_value - net_debt
-        implied_price = equity_value / shares_outstanding
+        implied_price = equity_value / e_0
 
-        
+        # Create a dictionary of rows
+        dcf_data = {
+            "EBIT": ebit_0,
+            "Tax Rate": [tax_rate] * len(years),
+            "D&A": d_a,
+            "Capex": capex,
+            "WC Change": wc_change,
+            "FCF": fcf_values,
+            "Discounted FCF": discounted_fcf,
+            "Cumulative PV": cumulative_pv,
+        }
 
+        # Convert to DataFrame and transpose
+        df = pd.DataFrame(dcf_data, index=years).T
+
+        # Add the row names as a column
+        df.reset_index(inplace=True)
+        df.rename(columns={'index': 'Metric'}, inplace=True)
+
+
+
+        # Add final rows separately
+        summary_df = pd.DataFrame({
+            "Metric": ["WACC","Net Debt","Terminal Value (PV)", "Enterprise Value", "Equity Value", "Implied Share Price"],
+            "Value": [wacc,net_debt,terminal_value, enterprise_value, equity_value, implied_price]
+        })
+
+        # Display results
+        print(df.to_string(index=False))
+        print("\nSummary:")
+        print(summary_df.to_string(index=False))
+
+        with pd.ExcelWriter('Auto_DCF.xlsx') as writer: 
+            df.to_excel(writer, sheet_name='Cash Flow Summary',index=False, engine='openpyxl')
+            summary_df.to_excel(writer, sheet_name='DCF',index=False, engine='openpyxl')
+                        
         return {
         "valuation": {
         "FCF (Year 1)": round(fcf_values[0], 2),
@@ -284,14 +832,24 @@ async def calculate_dcf(request: Request):
         "fcf_values": fcf_values,
         "discounted_fcf": discounted_fcf.tolist(), 
          "explanation": f"Based on a {round(wacc*100,1)}% WACC and {round(growth_rate*100,1)}% perpetual growth, "
-                   f"the implied price for {ticker.upper()} is approximately ${round(implied_price, 2)}.", 
+                   f"the implied price for {selected_ticker.upper()} is approximately ${round(implied_price, 2)}.", 
                   
     "error": None
 }
 
-
     except Exception as e:
         return {"error": str(e)}
+    
+
+
+    #
+    #
+    #
+    #
+    #
+    #
+    #
+    #
     
 @app.post("/analyze")
 async def analyze_stock(request: Request):
@@ -405,9 +963,6 @@ async def analyze_indicators(request: Request):
         "message": "Indicators calculated successfully.",
         "indicators": df.to_dict(orient="records")
     }
-
-
-
 
     
 
