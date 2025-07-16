@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Stock Analysis Assistant</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 30px; background-color: #f9f9f9; }
+    h1 { color: #333; text-align: center; }
+    textarea, input { width: 100%; padding: 8px; margin: 10px 0; box-sizing: border-box; }
+    button { padding: 10px 15px; background: #007BFF; color: white; border: none; cursor: pointer; border-radius: 10px; transition: background 0.3s ease; }
+    button:hover { background: #0056b3; }
+    pre { background: #f3f3f3; padding: 10px; white-space: pre-wrap; word-wrap: break-word; }
+    .section { background: #fff; padding: 20px; margin-bottom: 40px; border: 1px solid #ddd; }
+    #loadingContainer { display: none; text-align: center; margin-top: 20px; }
+    #loadingText { font-weight: bold; margin-bottom: 10px; }
+    .progress-bar { width: 100%; background-color: #ddd; height: 10px; border-radius: 5px; overflow: hidden; }
+    .progress-bar-fill { width: 0%; height: 100%; background-color: #007BFF; animation: load 2s linear infinite; }
+    @keyframes load { 0% { width: 0%; } 50% { width: 80%; } 100% { width: 100%; } }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; background-color: #fff; }
+    .button-row, .button-group { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .button-row button, .button-group button { flex: 1; min-width: 180px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <!--first layer-->
+  <div id="coverPage" class="fade-in" style="display:flex;flex-direction:column;align-items:center;justify-content:center; height:100vh; background: linear-gradient(135deg, #c0d8ff, #f4f9ff);">
+    <img src="https://cdn-icons-png.flaticon.com/512/2331/2331943.png" alt="Stock Icon" style="width:120px; margin-bottom:20px;" />
+    <h1>AI Stock Analysis Assistant</h1>
+    <p style="font-size:18px; margin-top:10px;">Empowering your investment decisions with intelligent insights.</p>
+    <button onclick="enterApp()">🚀 Start Analysis</button>
+  </div>
+<!--second layer-->
+  <div id="mainApp" style="display:none;">
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+    <button onclick="goToPage(3)">Skip to Technical Analysis</button>
+    <h1 style="margin: 0; flex-grow: 1; text-align: center;">Investment Preference Analysis</h1>
+  </div>
+    <h1>Investment Preference Analysis</h1>
+    <div id="loadingContainer">
+      <div id="loadingText">Analyzing... Please wait</div>
+      <div class="progress-bar"><div class="progress-bar-fill"></div></div>
+    </div>
+
+    <div class="section">
+      <label for="model">Choose a model:</label>
+      <select name="model" id="model">
+        <option value="gemma3">gemma3</option>
+        <option value="mistral">mistral</option>
+        <option value="deepseek-r1">deepseek-r1</option>
+      </select>
+
+       <br><br>
+
+      <textarea id="preferenceInput" rows="3" placeholder="Example: I want stable, US-based energy companies with solid growth."></textarea>
+      <div class="button-row">
+        <button onclick="analyzePreference()">Analyze Preference</button>
+      </div>
+      <div id="preferenceResult"></div>
+      <button onclick="downloadTableAsCSV('preference-table')">save as CSV</button>
+    </div>
+
+    
+
+
+  </div>
+  <!--third layer-->
+<div id="page3" style="display:none;">
+  <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+    <button onclick="goToPage(2)">← Back to Preference Analysis</button>
+    <h1 style="margin: 0; flex-grow: 1; text-align: center;">Technical Analysis & DCF Valuation</h1>
+  </div>
+<h1>Technical Analysis & DCF Valuation</h1>
+    <div class="section">
+      <h2>Technical Analysis Workflow</h2>
+      <input id="tickerInput" placeholder="Enter stock symbol (e.g., AAPL)" />
+      <div class="button-group">
+        <button onclick="startAnalysis()">Start Full Analysis</button>
+        <button onclick="fetchRawData()">1. Fetch Raw Data</button>
+        <button onclick="analyzeIndicators()">2. Analyze Indicators</button>
+      </div>
+      <div id="technicalResult"></div>
+      <button onclick="downloadTableAsCSV('technical-table')">save as CSV</button>
+    </div>
+
+    <div class="section">
+      <h2>DCF Valuation</h2>
+      <button onclick="runDCF()">Run DCF Analysis</button>
+      <div id="dcfResult" style="margin-top: 20px;"></div>
+    </div>
+
+    <div style="min-height: 420px;">
+  <canvas id="chartCanvas" width="800" height="400" style="display:block; margin:auto;"></canvas>
+</div>
+
+</div>
+<script>
+  let chartInstance = null;
+  let indicatorChart = null;
+
+  function enterApp() {
+    document.getElementById("coverPage").style.display = "none";
+    document.getElementById("mainApp").style.display = "block";
+  }
+  function goToPage(pageNumber) {
+  const mainApp = document.getElementById("mainApp");
+  const page3 = document.getElementById("page3");
+
+  if (pageNumber === 2) {
+    mainApp.style.display = "block";
+    page3.style.display = "none";
+  } else if (pageNumber === 3) {
+    mainApp.style.display = "none";
+    page3.style.display = "block";
+  }
+}
+
+
+  function showLoading() {
+    document.getElementById("loadingContainer").style.display = "block";
+  }
+  function hideLoading() {
+    document.getElementById("loadingContainer").style.display = "none";
+  }
+
+  function jsonToTable(jsonArray, maxRows = 30) {
+    if (!Array.isArray(jsonArray) || jsonArray.length === 0) return "<p>No data</p>";
+    const columns = Object.keys(jsonArray[0]);
+    let html = "<table><thead><tr>";
+    columns.forEach(col => { html += `<th>${col}</th>`; });
+    html += "</tr></thead><tbody>";
+    const startIdx = Math.max(jsonArray.length - maxRows, 0);
+    for(let i = startIdx; i < jsonArray.length; i++) {
+      const row = jsonArray[i];
+      html += "<tr>";
+      columns.forEach(col => { html += `<td>${row[col]}</td>`; });
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+    return html;
+  }
+
+  async function analyzePreference() {
+    const preference = document.getElementById("preferenceInput").value.trim();
+    const model = document.getElementById("model").value;
+    if (!preference) {
+        alert("Please enter your investment preference.");
+        return;
+    }
+    showLoading();
+    try {
+        const res = await fetch("http://localhost:8000/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ preference, model })
+        });
+        const data = await res.json();
+
+        if (data.reply) {
+    document.getElementById("preferenceResult").innerHTML = parsePipeTable(data.reply);
+    
+
+} else if (data.error) {
+            document.getElementById("preferenceResult").innerText = "Error: " + data.error;
+        } else {
+            // Fallback for unexpected data format from backend
+            document.getElementById("preferenceResult").innerText = "Unexpected response format: " + JSON.stringify(data);
+        }
+
+    } catch (e) {
+        document.getElementById("preferenceResult").innerText = "Error: " + e;
+    }
+    hideLoading();
+}
+
+  let cachedRawData = null;
+
+  async function fetchRawData() {
+    const ticker = document.getElementById("tickerInput").value.trim();
+    if (!ticker) { alert("Please enter a stock symbol."); return; }
+    showLoading();
+    try {
+      const res = await fetch("http://localhost:8000/fetch_data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById("technicalResult").innerText = data.error;
+        cachedRawData = null;
+      } else {
+        cachedRawData = data.data;
+        document.getElementById("technicalResult").innerHTML = jsonToTable(cachedRawData);
+      }
+    } catch (e) {
+      document.getElementById("technicalResult").innerText = "Error: " + e;
+      cachedRawData = null;
+    }
+    hideLoading();
+  }
+
+  async function analyzeIndicators() {
+    const ticker = document.getElementById("tickerInput").value.trim();
+    if (!ticker) { alert("Please enter a stock symbol."); return; }
+    if (!cachedRawData) { alert("Please fetch raw data first."); return; }
+    showLoading();
+    try {
+      const res = await fetch("http://localhost:8000/analyze_indicators", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker, raw_data: cachedRawData }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById("technicalResult").innerText = data.error;
+      } else if (data.indicators) {
+        document.getElementById("technicalResult").innerHTML = jsonToTable(data.indicators);
+        renderIndicatorChart(data.indicators);
+      } else {
+        document.getElementById("technicalResult").innerText = data.reply || JSON.stringify(data);
+      }
+    } catch (e) {
+      document.getElementById("technicalResult").innerText = "Error: " + e;
+    }
+    hideLoading();
+  }
+
+  function renderIndicatorChart(data) {
+  console.log("Render Indicator Chart with data:", data);
+  
+// 限制只显示最近60天
+const limited = data.slice(-60);
+console.log("Limiting data to last 60 days:", limited.length);
+
+  const ctx = document.getElementById("chartCanvas").getContext("2d");
+
+  if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  if (indicatorChart) { indicatorChart.destroy(); indicatorChart = null; }
+
+  // 过滤出有有效Close和Date的条目
+  const filtered = limited.filter(d => d.Date && d.Close !== null && d.Close !== undefined);
+console.log("SMA_20 available:", filtered.filter(d => d.SMA_20 !== undefined).length);
+console.log("SMA_50 available:", filtered.filter(d => d.SMA_50 !== undefined).length);
+console.log("RSI available:", filtered.filter(d => d.RSI !== undefined).length);
+
+
+
+  if (filtered.length === 0) {
+    document.getElementById("technicalResult").innerText = "No valid indicator data to display chart.";
+    return;
+  }
+
+  const labels = filtered.map(item => item.Date);
+console.log("Labels:", labels);
+ function safeNumber(val) {
+  return (val === null || val === undefined || isNaN(val)) ? NaN : Number(val);
+}
+
+
+  indicatorChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: "Close Price",
+          data: filtered.map(d => safeNumber(d.Close)),
+          borderColor: "black",
+          fill: false,
+          yAxisID: "yPrice"
+        },
+        {
+          label: "SMA 20",
+          data: filtered.map(d => safeNumber(d.SMA_20)),
+          borderColor: "blue",
+          fill: false,
+          yAxisID: "yPrice"
+        },
+        {
+          label: "SMA 50",
+          data: filtered.map(d => safeNumber(d.SMA_50)),
+          borderColor: "orange",
+          fill: false,
+          yAxisID: "yPrice"
+        },
+        {
+          label: "RSI",
+          data: filtered.map(d => safeNumber(d.RSI)),
+          borderColor: "green",
+          fill: false,
+          yAxisID: "yRSI"
+        }
+      ]
+    },
+    options: {
+      scales: {
+        yPrice: {
+          type: "linear",
+          position: "left",
+          title: { display: true, text: "Price" }
+        },
+        yRSI: {
+          type: "linear",
+          position: "right",
+          min: 0,
+          max: 100,
+          title: { display: true, text: "RSI" },
+          grid: { drawOnChartArea: false }
+        }
+      },
+      interaction: {
+        mode: "index",
+        intersect: false
+      },
+      plugins: {
+        legend: { display: true },
+        title: { display: true, text: "Stock Price and Technical Indicators" }
+      },
+      maintainAspectRatio: false,
+      responsive: true
+    }
+  });
+}
+
+function downloadTableAsCSV(tableId) {
+    const table = document.getElementById(tableId);
+    if (!table) {
+        alert("未找到表格：" + tableId);
+        return;
+    }
+
+    let csv = [];
+    const rows = table.querySelectorAll("tr");
+
+    for (let row of rows) {
+        let cols = row.querySelectorAll("td, th");
+        let csvRow = [];
+        cols.forEach(col => {
+            let text = col.innerText.replace(/\n/g, " ").replace(/"/g, '""');
+            csvRow.push(`"${text}"`);
+        });
+        csv.push(csvRow.join(","));
+    }
+
+    const csvBlob = new Blob([csv.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(csvBlob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "table_export.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+
+function parsePipeTable(text) {
+    const lines = text.trim().split("\n");
+
+    const headerIndex = lines.findIndex(line => line.includes("Symbol") && line.includes("Company Name"));
+    if (headerIndex === -1 || lines.length < headerIndex + 2) {
+        return "No valid table found.";
+    }
+
+    const headerLine = lines[headerIndex];
+    const dataLines = lines.slice(headerIndex + 2).filter(line => line.includes("|"));
+    const headerCells = headerLine.split("|").map(cell => cell.trim()).filter(cell => cell);
+
+    const table = document.createElement("table");
+    table.border = 1;
+    table.id = "preference-table"; 
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    headerCells.forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    let currentRow = null;
+
+    dataLines.forEach(line => {
+        const cells = line.split("|").map(cell => cell.trim());
+
+        if (cells[1]) {
+            // 新的一行
+            currentRow = document.createElement("tr");
+            for (let i = 1; i <= headerCells.length; i++) {
+                const td = document.createElement("td");
+                td.innerHTML = cells[i] || "";
+                currentRow.appendChild(td);
+            }
+            tbody.appendChild(currentRow);
+        } else if (currentRow && cells.length >= 4 && cells[3]) {
+            // 续行，追加 Rationale
+            const rationaleCell = currentRow.children[2];
+            const newBullet = cells[3].startsWith(".") ? cells[3].trim() : "• " + cells[3].trim();
+            rationaleCell.innerHTML += "<br>" + newBullet;
+        }
+    });
+
+    table.appendChild(tbody);
+    return table.outerHTML;
+}
+
+
+
+
+  function renderDCFChart(data) {
+    const ctx = document.getElementById("chartCanvas").getContext("2d");
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+    if (indicatorChart) { indicatorChart.destroy(); indicatorChart = null; }
+
+    chartInstance = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: ["2025", "2026", "2027", "2028", "2029"],
+        datasets: [
+          { label: "Free Cash Flow", data: data.fcf_values, borderColor: "blue", backgroundColor: "rgba(0,123,255,0.1)", fill: true },
+          { label: "Discounted FCF", data: data.discounted_fcf, borderColor: "green", backgroundColor: "rgba(40,167,69,0.1)", fill: true }
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: { title: { display: true, text: "DCF Cash Flow Forecast" } }
+      }
+    });
+  }
+
+  async function runDCF() {
+    const ticker = document.getElementById("tickerInput").value.trim();
+    if (!ticker) { alert("Please enter a stock symbol."); return; }
+    showLoading();
+    try {
+      const res = await fetch("http://localhost:8000/calculate_dcf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker })
+      });
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById("dcfResult").innerText = data.error;
+      } else {
+        renderDCFChart(data);
+        const explanation = data.explanation || '';
+        const valuation = data.valuation;
+        const tableHTML = jsonToTable([valuation]);
+        document.getElementById("dcfResult").innerHTML = `<h3>DCF Result</h3><p>${explanation}</p>${tableHTML}`;
+      }
+    } catch (e) {
+      document.getElementById("dcfResult").innerText = "Error: " + e;
+    }
+    hideLoading();
+  }
+
+  function startAnalysis() {
+    fetchRawData().then(() => analyzeIndicators());
+    let table = document.createElement("table");
+table.id = "technical-table";
+  }
+</script>
+
+</body>
+</html>
